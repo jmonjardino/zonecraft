@@ -12,6 +12,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:shell": "make pack && dbus-run-session -- gnome-shell-test-tool --headless --disable-animations --extension build/releases/zonecraft@jmonjardino.dev.shell-extension.zip tests/shell-smoke.js",
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {

@@ -82,7 +82,7 @@ The release archive is written to `build/releases/zonecraft@jmonjardino.dev.shel
 For an isolated Shell smoke test on Fedora 44:
 
 ```bash
-gnome-shell-test-tool --extension build/releases/zonecraft@jmonjardino.dev.shell-extension.zip
+npm run test:shell
 ```
 
 For runtime logs:

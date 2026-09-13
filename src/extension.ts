@@ -25,7 +25,7 @@ const shellGlobal = global as any;
 
 export default class ZonecraftExtension extends Extension {
   #repository: ProfileRepository | null = null;
-  #indicator: ZonecraftIndicator | null = null;
+  #indicator: any = null;
   #overlay: { destroy: () => void } | null = null;
   #undoSnapshots: WindowSnapshot[] = [];
   #monitorsChangedId = 0;
@@ -72,7 +72,7 @@ export default class ZonecraftExtension extends Extension {
   #createIndicator(): void {
     if (!this.#repository || this.#indicator) return;
     this.#indicator = new ZonecraftIndicator(this.#repository, {
-      activateProfile: (profile) => this.#activateProfile(profile),
+      activateProfile: (profile: LayoutProfile) => this.#activateProfile(profile),
       openPreferences: () => this.openPreferences(),
       undo: () => this.#undo(),
     });
