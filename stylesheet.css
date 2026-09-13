@@ -1,0 +1,83 @@
+.zonecraft-overlay {
+  background-color: rgba(10, 14, 20, 0.5);
+}
+
+.zonecraft-zone {
+  margin: 4px;
+  border: 2px solid rgba(98, 160, 234, 0.9);
+  border-radius: 12px;
+  background-color: rgba(53, 132, 228, 0.28);
+  color: white;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.zonecraft-zone:hover,
+.zonecraft-zone:focus {
+  background-color: rgba(53, 132, 228, 0.48);
+}
+
+.zonecraft-zone:assigned {
+  border-color: #8ff0a4;
+  background-color: rgba(46, 194, 126, 0.42);
+}
+
+.zonecraft-tray {
+  width: 360px;
+  max-height: 80%;
+  margin: 24px;
+  padding: 20px;
+  spacing: 12px;
+  border-radius: 16px;
+  background-color: rgba(30, 32, 36, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.zonecraft-chooser {
+  min-width: 360px;
+  padding: 24px;
+  spacing: 12px;
+  border-radius: 16px;
+  background-color: rgba(30, 32, 36, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.zonecraft-title {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.zonecraft-help,
+.zonecraft-empty {
+  color: #deddda;
+}
+
+.zonecraft-warning,
+.zonecraft-menu-error {
+  color: #f9f06b;
+}
+
+.zonecraft-window-scroll {
+  min-height: 180px;
+  max-height: 460px;
+}
+
+.zonecraft-window {
+  margin: 3px 0;
+  padding: 10px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.zonecraft-window:hover,
+.zonecraft-window:selected {
+  background-color: rgba(53, 132, 228, 0.5);
+}
+
+.zonecraft-window-suggested {
+  border-left: 3px solid #8ff0a4;
+}
+
+.zonecraft-actions {
+  spacing: 10px;
+}
