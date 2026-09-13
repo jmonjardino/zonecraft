@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        fedora: ['43', '44']
+    container: fedora:${{ matrix.fedora }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: dnf install -y nodejs npm gnome-shell zip make git
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: make pack
+      - name: Inspect release contents
+        run: unzip -l build/releases/zonecraft@jmonjardino.dev.shell-extension.zip
