@@ -5,6 +5,37 @@ Zonecraft is a profile-based window organizer for GNOME Shell. Design a grid for
 > [!IMPORTANT]
 > Zonecraft is in early development. Version `0.1.0` targets Fedora and has not yet been reviewed or published on extensions.gnome.org.
 
+## Demo
+
+A cluttered workspace, and the same four windows after one pass through Zonecraft.
+
+| Before                                                                                | After                                                                               |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| ![Four overlapping windows on an untidy desktop](docs/screenshots/desktop-before.png) | ![The same windows placed into the Focus grid](docs/screenshots/layout-applied.png) |
+
+### The workflow
+
+Start a profile from the panel indicator, or press <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>.
+
+| Panel indicator                                                                                             | Profile chooser                                                      |
+| ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| ![The Zonecraft panel menu listing the Focus, Coding and Writing profiles](docs/screenshots/panel-menu.png) | ![The profile chooser overlay](docs/screenshots/profile-chooser.png) |
+
+The assignment overlay draws the grid over your monitor and lists the windows on the current workspace. Choose a window, then choose a zone. Nothing moves yet.
+
+| Zones and windows                                                                                  | Four windows assigned                                                                           |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| ![The Focus grid with its five zones and the window list](docs/screenshots/assignment-overlay.png) | ![Four windows assigned, with the Notes zone left empty](docs/screenshots/assignments-made.png) |
+
+Select **Apply** and only the zones you filled are used; the empty `Notes` zone above is left exactly as it was. Zonecraft remembers which application you placed in each zone and offers it next time as a suggestion, and the previous positions stay available under **Undo last layout**.
+
+| Suggestions                                                                     | One-level undo                                                               |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| ![Suggestions shown next to the window names](docs/screenshots/suggestions.png) | ![Undo last layout in the panel menu](docs/screenshots/undo-last-layout.png) |
+
+> [!NOTE]
+> These are captures of a real GNOME Shell session running the extension. See [docs/screenshots/README.md](docs/screenshots/README.md) for how they were recorded, and for the one screen that is still missing.
+
 ## Features
 
 - Multiple reusable layout profiles.
