@@ -16,7 +16,7 @@ jobs:
         fedora: ['43', '44']
     container: fedora:${{ matrix.fedora }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install tools
         run: dnf install -y nodejs npm gnome-shell zip make git
       - run: npm ci
