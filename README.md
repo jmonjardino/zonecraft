@@ -3,7 +3,7 @@
 Zonecraft is a profile-based window organizer for GNOME Shell. Design a grid for each monitor role, start a profile, assign an open window to each zone, and apply the layout only when you are ready.
 
 > [!IMPORTANT]
-> Zonecraft is in early development. Version `0.1.0` targets Fedora and has not yet been reviewed or published on extensions.gnome.org.
+> Zonecraft is in early development. Version `0.1.0` targets Fedora and is installed from source. Publishing on extensions.gnome.org is not a goal right now — see [Roadmap](#roadmap).
 
 ## Demo
 
@@ -139,6 +139,8 @@ Zonecraft stores profiles in the local GSettings key `org.gnome.shell.extensions
 ## Roadmap
 
 Potential future work includes profile import/export, community translations, optional application rules, and support for later GNOME Shell releases. Compatibility is declared only after testing on each GNOME version.
+
+Publishing on extensions.gnome.org is deliberately out of scope. Zonecraft was written with AI assistance for personal use, as the headers of `src/extension.ts` and `src/prefs.ts` state, and the EGO review process expects a maintainer who can answer for every line under review. Install from source, and fork it freely if you want to take it further. Issues and pull requests are still welcome here.
 
 ## Contributing and security
 
