@@ -18,6 +18,8 @@ declare module 'resource:///org/gnome/shell/ui/main.js' {
   export const wm: any;
   export const notify: (title: string, body?: string) => void;
   export const notifyError: (title: string, body?: string) => void;
+  export const pushModal: (actor: any, params?: { actionMode?: number; timestamp?: number }) => any;
+  export const popModal: (grab: any, timestamp?: number) => void;
 }
 
 declare const global: any;

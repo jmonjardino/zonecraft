@@ -113,3 +113,41 @@ export function restoreSnapshots(snapshots: WindowSnapshot[]): string[] {
   }
   return failures;
 }
+
+export class SnapshotTracker {
+  #snapshots: WindowSnapshot[] = [];
+  #unmanagedIds = new Map<any, number>();
+  #onEmpty: () => void;
+
+  constructor(onEmpty: () => void) {
+    this.#onEmpty = onEmpty;
+  }
+
+  get snapshots(): WindowSnapshot[] {
+    return this.#snapshots;
+  }
+
+  replace(snapshots: WindowSnapshot[]): void {
+    this.clear();
+    this.#snapshots = snapshots;
+    for (const snapshot of snapshots)
+      this.#unmanagedIds.set(
+        snapshot.window,
+        snapshot.window.connect('unmanaged', () => this.#forget(snapshot.window)),
+      );
+  }
+
+  clear(): void {
+    for (const [window, id] of this.#unmanagedIds) window.disconnect(id);
+    this.#unmanagedIds.clear();
+    this.#snapshots = [];
+  }
+
+  #forget(window: any): void {
+    const id = this.#unmanagedIds.get(window);
+    if (id) window.disconnect(id);
+    this.#unmanagedIds.delete(window);
+    this.#snapshots = this.#snapshots.filter((snapshot) => snapshot.window !== window);
+    if (this.#snapshots.length === 0) this.#onEmpty();
+  }
+}

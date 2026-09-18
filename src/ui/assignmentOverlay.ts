@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import Clutter from 'gi://Clutter';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { calculateZoneRectangles } from '../core/geometry.js';
-import type { LayoutProfile, MonitorBinding, Rectangle } from '../core/types.js';
+import type { GridZone, LayoutProfile, MonitorBinding, Rectangle } from '../core/types.js';
 import { hintMatches, type WindowAssignment, type WindowCandidate } from '../runtime/windows.js';
 
 const shellGlobal = global as any;
+
+export const GRAB_FAILURE_MESSAGE =
+  'Zonecraft could not take over the screen. Close other menus or dialogs and try again.';
 
 type OverlayOptions = {
   profile: LayoutProfile;
@@ -19,24 +23,63 @@ type OverlayOptions = {
   onCancel: () => void;
 };
 
+function stageRectangle(): Rectangle {
+  return { x: 0, y: 0, width: shellGlobal.stage.width, height: shellGlobal.stage.height };
+}
+
+function primaryMonitorRectangle(): Rectangle {
+  const monitor = Main.layoutManager.primaryMonitor;
+  if (!monitor) return stageRectangle();
+  return { x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height };
+}
+
+function primaryWorkArea(): Rectangle {
+  const monitor = Main.layoutManager.primaryMonitor;
+  if (!monitor) return stageRectangle();
+  const area = shellGlobal.workspace_manager
+    .get_active_workspace()
+    .get_work_area_for_monitor(monitor.index);
+  return { x: area.x, y: area.y, width: area.width, height: area.height };
+}
+
+function createOverlayRoot(): any {
+  const root = new St.Widget({
+    style_class: 'zonecraft-overlay',
+    reactive: true,
+    can_focus: true,
+    ...stageRectangle(),
+  });
+  root.set_layout_manager(new Clutter.FixedLayout());
+  return root;
+}
+
+function createMonitorAnchor(area: Rectangle): any {
+  const anchor = new St.Widget({ ...area });
+  anchor.set_layout_manager(new Clutter.BinLayout());
+  return anchor;
+}
+
+function pushOverlayModal(root: any): any {
+  const grab = Main.pushModal(root, { actionMode: Shell.ActionMode.SYSTEM_MODAL });
+  if (grab.get_seat_state() === Clutter.GrabState.NONE) {
+    Main.popModal(grab);
+    root.destroy();
+    throw new Error(GRAB_FAILURE_MESSAGE);
+  }
+  return grab;
+}
+
 export class ProfileChooserOverlay {
   #root: any;
+  #grab: any = null;
 
   constructor(
     profiles: LayoutProfile[],
     onSelect: (profile: LayoutProfile) => void,
     onCancel: () => void,
   ) {
-    this.#root = new St.Widget({
-      style_class: 'zonecraft-overlay',
-      reactive: true,
-      can_focus: true,
-      x: 0,
-      y: 0,
-      width: shellGlobal.stage.width,
-      height: shellGlobal.stage.height,
-    });
-    this.#root.set_layout_manager(new Clutter.BinLayout());
+    this.#root = createOverlayRoot();
+    const anchor = createMonitorAnchor(primaryMonitorRectangle());
     const card = new St.BoxLayout({
       style_class: 'zonecraft-chooser',
       vertical: true,
@@ -58,7 +101,8 @@ export class ProfileChooserOverlay {
     const cancel = new St.Button({ style_class: 'button', label: 'Cancel', can_focus: true });
     cancel.connect('clicked', onCancel);
     card.add_child(cancel);
-    this.#root.add_child(card);
+    anchor.add_child(card);
+    this.#root.add_child(anchor);
     this.#root.connect('key-press-event', (_actor: any, event: any) => {
       if (event.get_key_symbol() === Clutter.KEY_Escape) {
         onCancel();
@@ -67,11 +111,15 @@ export class ProfileChooserOverlay {
       return Clutter.EVENT_PROPAGATE;
     });
     Main.uiGroup.add_child(this.#root);
+    this.#grab = pushOverlayModal(this.#root);
     shellGlobal.stage.set_key_focus(this.#root);
   }
 
   destroy(): void {
-    this.#root.destroy();
+    if (this.#grab) Main.popModal(this.#grab);
+    this.#grab = null;
+    this.#root?.destroy();
+    this.#root = null;
   }
 }
 
@@ -79,26 +127,19 @@ export class AssignmentOverlay {
   #root: any;
   #zoneLayer: any;
   #tray: any;
+  #grab: any = null;
   #selectedCandidate: WindowCandidate | null = null;
   #assignments = new Map<string, WindowAssignment>();
-  #zoneButtons = new Map<string, any>();
+  #zoneButtons = new Map<string, { button: any; name: string }>();
   #candidateButtons = new Map<any, any>();
+  #unmanagedIds = new Map<any, number>();
   #applyButton: any;
   #options: OverlayOptions;
 
   constructor(options: OverlayOptions) {
     this.#options = options;
-    this.#root = new St.Widget({
-      style_class: 'zonecraft-overlay',
-      reactive: true,
-      can_focus: true,
-      x: 0,
-      y: 0,
-      width: shellGlobal.stage.width,
-      height: shellGlobal.stage.height,
-    });
-    this.#root.set_layout_manager(new Clutter.BinLayout());
-    this.#zoneLayer = new St.Widget({ x_expand: true, y_expand: true });
+    this.#root = createOverlayRoot();
+    this.#zoneLayer = new St.Widget({ ...stageRectangle() });
     this.#zoneLayer.set_layout_manager(new Clutter.FixedLayout());
     this.#root.add_child(this.#zoneLayer);
     this.#root.connect('key-press-event', (_actor: any, event: any) => {
@@ -111,11 +152,18 @@ export class AssignmentOverlay {
     this.#buildZones();
     this.#buildTray();
     Main.uiGroup.add_child(this.#root);
+    this.#grab = pushOverlayModal(this.#root);
+    this.#trackCandidates();
     shellGlobal.stage.set_key_focus(this.#root);
   }
 
   destroy(): void {
-    this.#root.destroy();
+    for (const [window, id] of this.#unmanagedIds) window.disconnect(id);
+    this.#unmanagedIds.clear();
+    if (this.#grab) Main.popModal(this.#grab);
+    this.#grab = null;
+    this.#root?.destroy();
+    this.#root = null;
     this.#zoneButtons.clear();
     this.#candidateButtons.clear();
     this.#assignments.clear();
@@ -141,7 +189,7 @@ export class AssignmentOverlay {
         });
         button.connect('clicked', () => this.#assignToZone(binding, zone));
         this.#zoneLayer.add_child(button);
-        this.#zoneButtons.set(zone.id, button);
+        this.#zoneButtons.set(zone.id, { button, name: zone.name });
       }
     }
   }
@@ -157,7 +205,10 @@ export class AssignmentOverlay {
       new St.Label({ style_class: 'zonecraft-title', text: this.#options.profile.name }),
     );
     this.#tray.add_child(
-      new St.Label({ style_class: 'zonecraft-help', text: 'Choose a window, then choose a zone.' }),
+      new St.Label({
+        style_class: 'zonecraft-help',
+        text: 'Choose a window, then choose a zone. Choose an assigned zone to clear it.',
+      }),
     );
     if (this.#options.missingRoles.length > 0)
       this.#tray.add_child(
@@ -201,8 +252,6 @@ export class AssignmentOverlay {
       style_class: 'button suggested-action',
       label: 'Apply',
       can_focus: true,
-      reactive: false,
-      opacity: 120,
     });
     this.#applyButton.connect('clicked', () =>
       this.#options.onApply([...this.#assignments.values()]),
@@ -210,7 +259,34 @@ export class AssignmentOverlay {
     actions.add_child(cancel);
     actions.add_child(this.#applyButton);
     this.#tray.add_child(actions);
-    this.#root.add_child(this.#tray);
+    this.#syncApplyButton();
+    const anchor = createMonitorAnchor(primaryWorkArea());
+    anchor.add_child(this.#tray);
+    this.#root.add_child(anchor);
+  }
+
+  #trackCandidates(): void {
+    for (const candidate of this.#options.candidates)
+      this.#unmanagedIds.set(
+        candidate.window,
+        candidate.window.connect('unmanaged', () => this.#forgetWindow(candidate.window)),
+      );
+  }
+
+  #forgetWindow(window: any): void {
+    const id = this.#unmanagedIds.get(window);
+    if (id) window.disconnect(id);
+    this.#unmanagedIds.delete(window);
+    const button = this.#candidateButtons.get(window);
+    if (button) button.destroy();
+    this.#candidateButtons.delete(window);
+    if (this.#selectedCandidate?.window === window) this.#selectedCandidate = null;
+    for (const [zoneId, assignment] of [...this.#assignments])
+      if (assignment.candidate.window === window) {
+        this.#assignments.delete(zoneId);
+        this.#refreshZone(zoneId);
+      }
+    this.#syncApplyButton();
   }
 
   #sortedCandidates(): WindowCandidate[] {
@@ -233,8 +309,13 @@ export class AssignmentOverlay {
     }
   }
 
-  #assignToZone(binding: MonitorBinding, zone: any): void {
-    if (!this.#selectedCandidate) return;
+  #assignToZone(binding: MonitorBinding, zone: GridZone): void {
+    if (!this.#selectedCandidate) {
+      if (!this.#assignments.delete(zone.id)) return;
+      this.#refreshZone(zone.id);
+      this.#syncApplyButton();
+      return;
+    }
     for (const [zoneId, assignment] of this.#assignments)
       if (assignment.candidate.window === this.#selectedCandidate.window) {
         this.#assignments.delete(zoneId);
@@ -245,18 +326,21 @@ export class AssignmentOverlay {
     this.#selectedCandidate = null;
     for (const button of this.#candidateButtons.values())
       button.remove_style_pseudo_class('selected');
-    this.#applyButton.reactive = true;
-    this.#applyButton.opacity = 255;
+    this.#syncApplyButton();
+  }
+
+  #syncApplyButton(): void {
+    const enabled = this.#assignments.size > 0;
+    this.#applyButton.reactive = enabled;
+    this.#applyButton.opacity = enabled ? 255 : 120;
   }
 
   #refreshZone(zoneId: string): void {
-    const button = this.#zoneButtons.get(zoneId);
-    if (!button) return;
+    const entry = this.#zoneButtons.get(zoneId);
+    if (!entry) return;
     const assignment = this.#assignments.get(zoneId);
-    button.label = assignment
-      ? `${assignment.zone.name}\n${assignment.candidate.label}`
-      : button.label.split('\n')[0];
-    if (assignment) button.add_style_pseudo_class('assigned');
-    else button.remove_style_pseudo_class('assigned');
+    entry.button.label = assignment ? `${entry.name}\n${assignment.candidate.label}` : entry.name;
+    if (assignment) entry.button.add_style_pseudo_class('assigned');
+    else entry.button.remove_style_pseudo_class('assigned');
   }
 }

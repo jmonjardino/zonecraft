@@ -15,8 +15,8 @@ import {
   listWindowCandidates,
   restoreSnapshots,
   snapshotAssignments,
+  SnapshotTracker,
   type WindowAssignment,
-  type WindowSnapshot,
 } from './runtime/windows.js';
 import { AssignmentOverlay, ProfileChooserOverlay } from './ui/assignmentOverlay.js';
 import { ZonecraftIndicator } from './ui/indicator.js';
@@ -27,13 +27,14 @@ export default class ZonecraftExtension extends Extension {
   #repository: ProfileRepository | null = null;
   #indicator: any = null;
   #overlay: { destroy: () => void } | null = null;
-  #undoSnapshots: WindowSnapshot[] = [];
+  #snapshots: SnapshotTracker | null = null;
   #monitorsChangedId = 0;
   #indicatorSettingId = 0;
 
   enable(): void {
     const settings = this.getSettings();
     this.#repository = new ProfileRepository(settings);
+    this.#snapshots = new SnapshotTracker(() => this.#indicator?.setCanUndo(false));
     if (settings.get_boolean('show-panel-indicator')) this.#createIndicator();
     this.#indicatorSettingId = settings.connect('changed::show-panel-indicator', () => {
       if (settings.get_boolean('show-panel-indicator')) this.#createIndicator();
@@ -66,7 +67,8 @@ export default class ZonecraftExtension extends Extension {
     this.#indicator = null;
     this.#repository?.destroy();
     this.#repository = null;
-    this.#undoSnapshots = [];
+    this.#snapshots?.clear();
+    this.#snapshots = null;
   }
 
   #createIndicator(): void {
@@ -93,14 +95,18 @@ export default class ZonecraftExtension extends Extension {
     } else if (profiles.length === 1) this.#activateProfile(profiles[0]!);
     else {
       this.#cancelOverlay();
-      this.#overlay = new ProfileChooserOverlay(
-        profiles,
-        (profile) => {
-          this.#cancelOverlay();
-          this.#activateProfile(profile);
-        },
-        () => this.#cancelOverlay(),
-      );
+      try {
+        this.#overlay = new ProfileChooserOverlay(
+          profiles,
+          (profile) => {
+            this.#cancelOverlay();
+            this.#activateProfile(profile);
+          },
+          () => this.#cancelOverlay(),
+        );
+      } catch (error) {
+        this.#reportOverlayFailure(error);
+      }
     }
   }
 
@@ -126,15 +132,19 @@ export default class ZonecraftExtension extends Extension {
         height: area.height,
       });
     }
-    this.#overlay = new AssignmentOverlay({
-      profile,
-      bindings,
-      candidates: listWindowCandidates(workspace),
-      workAreas,
-      missingRoles: missing.map(roleKey),
-      onCancel: () => this.#cancelOverlay(),
-      onApply: (assignments) => this.#apply(profile, assignments, workAreas),
-    });
+    try {
+      this.#overlay = new AssignmentOverlay({
+        profile,
+        bindings,
+        candidates: listWindowCandidates(workspace),
+        workAreas,
+        missingRoles: missing.map(roleKey),
+        onCancel: () => this.#cancelOverlay(),
+        onApply: (assignments) => this.#apply(profile, assignments, workAreas),
+      });
+    } catch (error) {
+      this.#reportOverlayFailure(error);
+    }
   }
 
   #apply(
@@ -142,11 +152,11 @@ export default class ZonecraftExtension extends Extension {
     assignments: WindowAssignment[],
     workAreas: Map<number, Rectangle>,
   ): void {
-    this.#undoSnapshots = snapshotAssignments(assignments);
+    this.#snapshots?.replace(snapshotAssignments(assignments));
     const failures = applyAssignments(assignments, workAreas);
     this.#saveHints(profile, assignments);
     this.#cancelOverlay();
-    this.#indicator?.setCanUndo(this.#undoSnapshots.length > 0);
+    this.#indicator?.setCanUndo((this.#snapshots?.snapshots.length ?? 0) > 0);
     if (failures.length > 0)
       Main.notifyError(_('Zonecraft applied with errors'), failures.join('\n'));
     else Main.notify(_('Zonecraft'), _(`Placed ${assignments.length} window(s).`));
@@ -168,11 +178,16 @@ export default class ZonecraftExtension extends Extension {
   }
 
   #undo(): void {
-    const failures = restoreSnapshots(this.#undoSnapshots);
-    this.#undoSnapshots = [];
+    const failures = restoreSnapshots(this.#snapshots?.snapshots ?? []);
+    this.#snapshots?.clear();
     this.#indicator?.setCanUndo(false);
     if (failures.length > 0) Main.notifyError(_('Zonecraft undo failed'), failures.join('\n'));
     else Main.notify(_('Zonecraft'), _('The previous window layout was restored.'));
+  }
+
+  #reportOverlayFailure(error: unknown): void {
+    this.#overlay = null;
+    Main.notifyError(_('Zonecraft'), error instanceof Error ? error.message : String(error));
   }
 
   #cancelOverlay(): void {
