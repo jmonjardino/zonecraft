@@ -4,6 +4,7 @@
 // and can maintain this code.
 
 import Adw from 'gi://Adw';
+import Gdk from 'gi://Gdk?version=4.0';
 import GObject from 'gi://GObject';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
@@ -284,17 +285,7 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     profilesGroup.add(addProfile);
 
     const behavior = new Adw.PreferencesGroup({ title: _('Behavior') });
-    const shortcut = new Adw.EntryRow({
-      title: _('Open selector'),
-      text: settings.get_strv('open-selector')[0] ?? '<Super><Shift>z',
-    });
-    shortcut.connect('apply', () => {
-      const accelerator = shortcut.text.trim();
-      const [valid] = Gtk.accelerator_parse(accelerator);
-      if (valid) settings.set_strv('open-selector', [accelerator]);
-      else window.add_toast(new Adw.Toast({ title: _('Invalid keyboard shortcut') }));
-    });
-    behavior.add(shortcut);
+    behavior.add(this.shortcutRow(window, settings));
     const showIndicator = new Adw.SwitchRow({
       title: _('Show panel indicator'),
       active: settings.get_boolean('show-panel-indicator'),
@@ -319,6 +310,16 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       if (row.expanded) context.expanded.add(profileId);
       else context.expanded.delete(profileId);
     });
+    const apply = new Gtk.Button({
+      icon_name: 'media-playback-start-symbolic',
+      valign: Gtk.Align.CENTER,
+      tooltip_text: _('Apply profile'),
+    });
+    apply.connect('clicked', () =>
+      // GNOME Shell listens for this key and opens the assignment overlay.
+      context.settings.set_string('activate-profile', `${profileId}:${GLib.get_monotonic_time()}`),
+    );
+    row.add_suffix(apply);
     const duplicate = new Gtk.Button({
       icon_name: 'edit-copy-symbolic',
       valign: Gtk.Align.CENTER,
@@ -529,6 +530,98 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         edit((target) => (target.innerGap = value), false),
       ),
     );
+  }
+
+  shortcutRow(window: any, settings: any): any {
+    const row = new Adw.ActionRow({
+      title: _('Open selector'),
+      subtitle: _('Shortcut that starts a profile from anywhere'),
+      activatable: true,
+    });
+    const label = new Gtk.ShortcutLabel({
+      accelerator: settings.get_strv('open-selector')[0] ?? '',
+      disabled_text: _('Disabled'),
+      valign: Gtk.Align.CENTER,
+    });
+    row.add_suffix(label);
+    const reset = new Gtk.Button({
+      icon_name: 'edit-undo-symbolic',
+      valign: Gtk.Align.CENTER,
+      tooltip_text: _('Restore the default shortcut'),
+    });
+    reset.add_css_class('flat');
+    const refresh = (): void => {
+      label.accelerator = settings.get_strv('open-selector')[0] ?? '';
+      reset.visible = settings.get_user_value('open-selector') !== null;
+    };
+    reset.connect('clicked', () => {
+      settings.reset('open-selector');
+      refresh();
+    });
+    row.add_suffix(reset);
+    row.connect('activated', () =>
+      this.recordShortcut(window, (accelerator) => {
+        settings.set_strv('open-selector', accelerator ? [accelerator] : []);
+        refresh();
+      }),
+    );
+    refresh();
+    return row;
+  }
+
+  /** Captures the next key combination. Esc cancels; Backspace disables the shortcut. */
+  recordShortcut(window: any, done: (accelerator: string | null) => void): void {
+    const content = new Gtk.Box({
+      orientation: Gtk.Orientation.VERTICAL,
+      spacing: 12,
+      margin_top: 24,
+      margin_bottom: 24,
+      margin_start: 24,
+      margin_end: 24,
+    });
+    content.append(new Gtk.Label({ label: _('Press the new shortcut'), css_classes: ['title-2'] }));
+    const hint = new Gtk.Label({
+      label: _('Esc to cancel, Backspace to disable the shortcut.'),
+      wrap: true,
+      css_classes: ['dim-label'],
+    });
+    content.append(hint);
+    const toolbar = new Adw.ToolbarView({ content });
+    toolbar.add_top_bar(new Adw.HeaderBar({ show_title: false }));
+    const dialog = new Adw.Dialog({ title: _('Set shortcut'), content_width: 360, child: toolbar });
+    const keys = new Gtk.EventControllerKey();
+    keys.connect(
+      'key-pressed',
+      (_controller: any, keyval: number, keycode: number, state: number): boolean => {
+        const mask = state & Gtk.accelerator_get_default_mod_mask() & ~Gdk.ModifierType.LOCK_MASK;
+        if (mask === 0 && keyval === Gdk.KEY_Escape) {
+          dialog.close();
+          return Gdk.EVENT_STOP;
+        }
+        if (mask === 0 && keyval === Gdk.KEY_BackSpace) {
+          done(null);
+          dialog.close();
+          return Gdk.EVENT_STOP;
+        }
+        const key = Gdk.keyval_to_lower(keyval);
+        // Modifier presses on their own are not valid accelerators yet: keep waiting.
+        if (!Gtk.accelerator_valid(key, mask)) return Gdk.EVENT_STOP;
+        const functionKey = key >= Gdk.KEY_F1 && key <= Gdk.KEY_F35;
+        if (mask === 0 && !functionKey) {
+          hint.label = _('Use at least one modifier such as Super, Ctrl or Alt.');
+          return Gdk.EVENT_STOP;
+        }
+        done(Gtk.accelerator_name_with_keycode(null, key, keycode, mask));
+        dialog.close();
+        return Gdk.EVENT_STOP;
+      },
+    );
+    dialog.add_controller(keys);
+    // Without this, GNOME Shell consumes combinations such as Super+Shift+Z itself.
+    const surface = (): any => window.get_native()?.get_surface();
+    dialog.connect('map', () => surface()?.inhibit_system_shortcuts?.(null));
+    dialog.connect('closed', () => surface()?.restore_system_shortcuts?.());
+    dialog.present(window);
   }
 
   gapRow(title: string, value: number, changed: (value: number) => void): any {

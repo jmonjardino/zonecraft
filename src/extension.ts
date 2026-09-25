@@ -31,6 +31,7 @@ export default class ZonecraftExtension extends Extension {
   #snapshots: SnapshotTracker | null = null;
   #monitorsChangedId = 0;
   #indicatorSettingId = 0;
+  #activateRequestId = 0;
 
   enable(): void {
     const settings = this.getSettings();
@@ -43,6 +44,13 @@ export default class ZonecraftExtension extends Extension {
         this.#indicator?.destroy();
         this.#indicator = null;
       }
+    });
+    this.#activateRequestId = settings.connect('changed::activate-profile', () => {
+      const [profileId] = settings.get_string('activate-profile').split(':');
+      const profile = this.#repository?.data.profiles.find(
+        (candidate) => candidate.id === profileId,
+      );
+      if (profile) this.#activateProfile(profile);
     });
     Main.wm.addKeybinding(
       'open-selector',
@@ -63,6 +71,9 @@ export default class ZonecraftExtension extends Extension {
     if (this.#indicatorSettingId && this.#repository)
       this.#repository.settings.disconnect(this.#indicatorSettingId);
     this.#indicatorSettingId = 0;
+    if (this.#activateRequestId && this.#repository)
+      this.#repository.settings.disconnect(this.#activateRequestId);
+    this.#activateRequestId = 0;
     Main.wm.removeKeybinding('open-selector');
     this.#indicator?.destroy();
     this.#indicator = null;

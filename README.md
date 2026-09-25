@@ -87,7 +87,7 @@ gnome-extensions prefs zonecraft@jmonjardino.dev
 
 1. Open **Manage profiles…** from the Zonecraft panel indicator.
 2. Create a profile and design the layout for each monitor role: select a zone in the preview, split or remove it, and drag the gaps between zones to resize them. Profiles saved by `0.1.0` are converted automatically.
-3. Start the profile from the panel, or press <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>.
+3. Start the profile from the panel, with its **Apply** button in preferences, or press <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>. To change the shortcut, select **Open selector** in preferences and press the new combination.
 4. Choose a window and then a zone. Repeat as needed.
 5. Select **Apply**. Empty zones and unselected windows are left untouched.
 6. Use **Undo last layout** from the panel if you want to restore the previous positions.

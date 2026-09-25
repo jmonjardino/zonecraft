@@ -10,6 +10,11 @@
       <default>['&lt;Super&gt;&lt;Shift&gt;z']</default>
       <summary>Open the Zonecraft profile selector</summary>
     </key>
+    <key name="activate-profile" type="s">
+      <default>''</default>
+      <summary>Profile start request</summary>
+      <description>Written by the preferences window as "profile-id:nonce" to start that profile in GNOME Shell.</description>
+    </key>
     <key name="show-panel-indicator" type="b">
       <default>true</default>
       <summary>Show the Zonecraft panel indicator</summary>
