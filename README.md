@@ -41,6 +41,7 @@ Select **Apply** and only the zones you filled are used; the empty `Notes` zone 
 - Multiple reusable layout profiles.
 - Free-form layouts: split any zone side by side or top and bottom, as often as needed (up to 64 zones per monitor), and resize each divider independently.
 - Different layouts for the primary monitor and monitors to its left, right, above, or below.
+- Vertical monitor support: new layouts follow the connected monitor's shape (rows on vertical monitors, columns on horizontal ones, three zones on ultrawide screens), one button creates a profile for every connected monitor, and layouts can swap rows and columns when a monitor is rotated.
 - Visual assignment overlay with one window per zone.
 - Suggestions based on the last application used in a zone—never automatic movement.
 - Partial application, safe cancellation, and one-level Undo.
@@ -97,6 +98,10 @@ Only normal windows from the current workspace are offered. Minimized windows ar
 ### Monitor roles
 
 Profiles bind to the primary monitor and to relative roles such as `left-1` or `right-2`. Secondary displays are ranked by distance from the primary display. If a required role is absent, Zonecraft warns you and applies only the layouts that have a matching monitor; it never silently substitutes another display.
+
+### Vertical monitors
+
+A monitor taller than it is wide counts as vertical. Each monitor layout records the orientation it was drawn for, and the preview uses that shape. With **Adapt to rotated monitors** on (the default for new layouts), a layout drawn for a horizontal monitor is applied with its rows and columns swapped when the monitor is vertical, and the other way round; zone order and sizes are kept. Layouts saved before this option existed are never rotated until you turn it on. GNOME Shell shares the connected monitors with the preferences window through the `monitor-topology` key.
 
 ## Development
 

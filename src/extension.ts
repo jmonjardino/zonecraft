@@ -9,6 +9,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 import { bindMonitorLayouts, roleKey } from './core/monitors.js';
 import { findZone } from './core/layout.js';
+import { adaptLayoutToMonitor, describeTopology } from './core/orientation.js';
 import type { LayoutProfile, LogicalMonitor, Rectangle } from './core/types.js';
 import { ProfileRepository } from './runtime/repository.js';
 import {
@@ -59,9 +60,11 @@ export default class ZonecraftExtension extends Extension {
       Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
       () => this.#openProfileSelector(),
     );
-    this.#monitorsChangedId = Main.layoutManager.connect('monitors-changed', () =>
-      this.#cancelOverlay(),
-    );
+    this.#monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
+      this.#cancelOverlay();
+      this.#publishTopology();
+    });
+    this.#publishTopology();
   }
 
   disable(): void {
@@ -106,6 +109,15 @@ export default class ZonecraftExtension extends Extension {
     else this.openPreferences();
   }
 
+  /** Preferences run in another process and cannot see the monitors, so share them. */
+  #publishTopology(): void {
+    const settings = this.#repository?.settings;
+    if (!settings) return;
+    const topology = JSON.stringify(describeTopology(this.#logicalMonitors()));
+    if (settings.get_string('monitor-topology') !== topology)
+      settings.set_string('monitor-topology', topology);
+  }
+
   #openProfileSelector(): void {
     if (!this.#repository || this.#repository.error) {
       Main.notifyError(
@@ -139,7 +151,12 @@ export default class ZonecraftExtension extends Extension {
   #activateProfile(profile: LayoutProfile): void {
     this.#cancelOverlay();
     const monitors = this.#logicalMonitors();
-    const { bindings, missing } = bindMonitorLayouts(profile.monitors, monitors);
+    const bound = bindMonitorLayouts(profile.monitors, monitors);
+    const { missing } = bound;
+    const bindings = bound.bindings.map((binding) => ({
+      ...binding,
+      layout: adaptLayoutToMonitor(binding.layout, binding.monitor),
+    }));
     if (bindings.length === 0) {
       Main.notifyError(
         _('Zonecraft'),

@@ -17,4 +17,7 @@ export function finish() {
   if (!extension) throw new Error(`${UUID} was not loaded.`);
   if (extension.state !== ExtensionState.ACTIVE)
     throw new Error(`${UUID} is not active; current state is ${extension.state}.`);
+  const topology = JSON.parse(extension.stateObj.getSettings().get_string('monitor-topology'));
+  if (topology.length === 0 || topology[0].role.kind !== 'primary')
+    throw new Error(`${UUID} did not publish the monitor topology: ${JSON.stringify(topology)}.`);
 }

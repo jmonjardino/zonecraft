@@ -15,6 +15,11 @@
       <summary>Profile start request</summary>
       <description>Written by the preferences window as "profile-id:nonce" to start that profile in GNOME Shell.</description>
     </key>
+    <key name="monitor-topology" type="s">
+      <default>'[]'</default>
+      <summary>Connected monitors</summary>
+      <description>Written by GNOME Shell as JSON so the preferences window knows each monitor's role and size.</description>
+    </key>
     <key name="show-panel-indicator" type="b">
       <default>true</default>
       <summary>Show the Zonecraft panel indicator</summary>

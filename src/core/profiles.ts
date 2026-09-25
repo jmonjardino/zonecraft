@@ -26,6 +26,7 @@ export function createDefaultProfile(id: string, name = 'My layout'): LayoutProf
     monitors: [
       {
         role: { kind: 'primary' },
+        orientation: 'landscape',
         outerGap: 8,
         innerGap: 8,
         root: {
@@ -105,6 +106,13 @@ function validateLayout(value: unknown, prefix: string, errors: string[]): void 
     return;
   }
   validateRole(value.role, prefix, errors);
+  if (
+    value.orientation !== undefined &&
+    !['landscape', 'portrait'].includes(String(value.orientation))
+  )
+    errors.push(`${prefix} orientation must be landscape or portrait.`);
+  if (value.adaptOrientation !== undefined && typeof value.adaptOrientation !== 'boolean')
+    errors.push(`${prefix} adaptOrientation must be a boolean.`);
   if (
     !Number.isInteger(value.outerGap) ||
     (value.outerGap as number) < 0 ||

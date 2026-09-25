@@ -22,6 +22,14 @@ import {
   splitZone,
 } from './core/layout.js';
 import {
+  createProfileFromMonitors,
+  findTopologyMonitor,
+  orientationOf,
+  parseTopology,
+  templateLayout,
+  transposeNode,
+} from './core/orientation.js';
+import {
   createDefaultProfile,
   emptyData,
   nextUniqueName,
@@ -33,14 +41,19 @@ import {
   type Direction,
   type LayoutProfile,
   type MonitorLayout,
+  type MonitorRole,
+  type Orientation,
   type Rectangle,
   type SplitAxis,
+  type TopologyMonitor,
   type ZonecraftData,
 } from './core/types.js';
 
 const PREVIEW_PADDING = 4;
 const PREVIEW_GAP = 8;
 const DIVIDER_GRAB_DISTANCE = 6;
+/** Size used for monitors that are not connected right now. */
+const FALLBACK_MONITOR = { width: 1920, height: 1080 };
 
 /** Shared state of the preferences window. Widgets are rebuilt from it after structural edits. */
 type EditorContext = {
@@ -51,11 +64,14 @@ type EditorContext = {
   commit: (mutation: (data: ZonecraftData) => void, rerender?: boolean) => void;
   expanded: Set<string>;
   selectedZones: Map<string, string>;
+  /** Monitors connected right now, as published by GNOME Shell. Empty when unknown. */
+  topology: () => TopologyMonitor[];
 };
 
 const GridPreview = GObject.registerClass(
   class GridPreview extends Gtk.DrawingArea {
     layout: () => MonitorLayout | undefined;
+    aspect: number;
     selectedZone: () => string | undefined;
     onSelect: (zoneId: string) => void;
     onResized: () => void;
@@ -65,18 +81,21 @@ const GridPreview = GObject.registerClass(
 
     constructor(options: {
       layout: () => MonitorLayout | undefined;
+      /** Width divided by height of the monitor the layout is drawn for. */
+      aspect: number;
       selectedZone: () => string | undefined;
       onSelect: (zoneId: string) => void;
       onResized: () => void;
     }) {
       super({
         hexpand: true,
-        height_request: 260,
+        height_request: options.aspect < 1 ? 360 : 260,
         focusable: true,
         margin_top: 12,
         margin_bottom: 6,
       });
       this.layout = options.layout;
+      this.aspect = options.aspect;
       this.selectedZone = options.selectedZone;
       this.onSelect = options.onSelect;
       this.onResized = options.onResized;
@@ -99,12 +118,19 @@ const GridPreview = GObject.registerClass(
       this.add_controller(motion);
     }
 
+    /** The largest rectangle with the monitor's proportions, centred in the widget. */
     area(): Rectangle {
-      return {
-        x: PREVIEW_PADDING,
-        y: PREVIEW_PADDING,
+      const available = {
         width: this.get_width() - PREVIEW_PADDING * 2,
         height: this.get_height() - PREVIEW_PADDING * 2,
+      };
+      const width = Math.min(available.width, available.height * this.aspect);
+      const height = Math.min(available.height, available.width / this.aspect);
+      return {
+        x: PREVIEW_PADDING + (available.width - width) / 2,
+        y: PREVIEW_PADDING + (available.height - height) / 2,
+        width,
+        height,
       };
     }
 
@@ -225,6 +251,24 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       groups = this.buildGroups(context);
       for (const group of groups) page.add(group);
     };
+    // Rebuild on idle: the widget that emitted a signal must outlive its handler.
+    const scheduleRender = (): void => {
+      if (!renderSource)
+        renderSource = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+          renderSource = 0;
+          render();
+          return GLib.SOURCE_REMOVE;
+        });
+    };
+    let topologyJson = settings.get_string('monitor-topology');
+    let topology = parseTopology(topologyJson);
+    const topologyId = settings.connect('changed::monitor-topology', () => {
+      const next = settings.get_string('monitor-topology');
+      if (next === topologyJson) return;
+      topologyJson = next;
+      topology = parseTopology(next);
+      scheduleRender();
+    });
     const context: EditorContext = {
       window,
       settings,
@@ -241,18 +285,14 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
             new Adw.Toast({ title: error instanceof Error ? error.message : String(error) }),
           );
         }
-        // Rebuild on idle: the widget that emitted this signal must outlive its handler.
-        if (rerender && !renderSource)
-          renderSource = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            renderSource = 0;
-            render();
-            return GLib.SOURCE_REMOVE;
-          });
+        if (rerender) scheduleRender();
       },
       expanded: new Set<string>(),
       selectedZones: new Map<string, string>(),
+      topology: () => topology,
     };
     window.connect('close-request', () => {
+      settings.disconnect(topologyId);
       if (renderSource) GLib.source_remove(renderSource);
       renderSource = 0;
       return false;
@@ -264,7 +304,9 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     const { settings, window } = context;
     const profilesGroup = new Adw.PreferencesGroup({
       title: _('Layout profiles'),
-      description: _('Create layouts for the primary monitor and monitors around it.'),
+      description: _(
+        'Create layouts for the primary monitor and monitors around it. New layouts follow the shape of the connected monitor: rows on vertical monitors, columns on horizontal ones.',
+      ),
     });
     for (const profile of context.data().profiles)
       profilesGroup.add(this.buildProfileRow(context, profile));
@@ -272,17 +314,29 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       title: _('Create profile'),
       start_icon_name: 'list-add-symbolic',
     });
-    addProfile.connect('activated', () =>
+    const createProfile = (monitors: TopologyMonitor[]): void =>
       context.commit((data) => {
-        const profile = createDefaultProfile(
-          randomId(),
-          nextUniqueName(data.profiles, 'My layout'),
-        );
+        const name = nextUniqueName(data.profiles, 'My layout');
+        const profile =
+          monitors.length > 0
+            ? createProfileFromMonitors(randomId(), name, monitors, randomId)
+            : createDefaultProfile(randomId(), name);
         data.profiles.push(profile);
         context.expanded.add(profile.id);
-      }),
+      });
+    const topology = context.topology();
+    addProfile.connect('activated', () =>
+      createProfile(topology.filter((monitor) => monitor.role.kind === 'primary')),
     );
     profilesGroup.add(addProfile);
+    if (topology.length > 1) {
+      const addForMonitors = new Adw.ButtonRow({
+        title: _(`Create profile for the ${topology.length} connected monitors`),
+        start_icon_name: 'video-display-symbolic',
+      });
+      addForMonitors.connect('activated', () => createProfile(topology));
+      profilesGroup.add(addForMonitors);
+    }
 
     const behavior = new Adw.PreferencesGroup({ title: _('Behavior') });
     behavior.add(this.shortcutRow(window, settings));
@@ -384,10 +438,9 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
             target.monitors.filter(
               (monitor) => monitor.role.kind === 'relative' && monitor.role.direction === direction,
             ).length;
-          const layout = createDefaultProfile(randomId()).monitors[0]!;
-          layout.role = { kind: 'relative', direction, rank };
-          for (const zone of layoutZones(layout)) zone.id = randomId();
-          target.monitors.push(layout);
+          const role: MonitorRole = { kind: 'relative', direction, rank };
+          const connected = findTopologyMonitor(context.topology(), role);
+          target.monitors.push(templateLayout(role, connected ?? FALLBACK_MONITOR, randomId));
         }),
       );
       addMonitorRow.add_suffix(button);
@@ -417,11 +470,22 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     };
 
     const zones = layoutZones(layout);
+    const connected = findTopologyMonitor(context.topology(), layout.role);
+    const orientation: Orientation =
+      layout.orientation ?? (connected ? orientationOf(connected) : 'landscape');
     const title =
       layout.role.kind === 'primary'
         ? _('Primary monitor')
         : _(`${capitalize(layout.role.direction)} monitor ${layout.role.rank}`);
-    const header = new Adw.ActionRow({ title, subtitle: _(`${zones.length} zone(s)`) });
+    const status = connected
+      ? _(
+          `connected: ${orientationLabel(orientationOf(connected))}, ${connected.width}×${connected.height}`,
+        )
+      : _('not connected');
+    const header = new Adw.ActionRow({
+      title,
+      subtitle: `${_(`${zones.length} zone(s)`)} · ${status}`,
+    });
     if (layout.role.kind !== 'primary') {
       const remove = new Gtk.Button({
         icon_name: 'list-remove-symbolic',
@@ -448,6 +512,7 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     });
     const preview = new GridPreview({
       layout: () => findLayout(context.data()),
+      aspect: previewAspect(orientation, connected),
       selectedZone,
       onSelect: (zoneId: string) => context.selectedZones.set(selectionKey, zoneId),
       // The preview already shows the new size, so only persist it.
@@ -519,6 +584,37 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       });
       container.add_row(zoneName);
     }
+
+    const orientations: Orientation[] = ['landscape', 'portrait'];
+    const orientationRow = new Adw.ComboRow({
+      title: _('Orientation'),
+      subtitle: _('Changing it turns rows into columns and back'),
+      model: Gtk.StringList.new(orientations.map(orientationLabel)),
+      selected: orientations.indexOf(orientation),
+    });
+    orientationRow.connect('notify::selected', () => {
+      const chosen = orientations[orientationRow.selected];
+      if (!chosen || chosen === orientation) return;
+      edit((target) => {
+        target.root = transposeNode(target.root);
+        target.orientation = chosen;
+      });
+    });
+    container.add_row(orientationRow);
+    const adapt = new Adw.SwitchRow({
+      title: _('Adapt to rotated monitors'),
+      subtitle: _('Swap rows and columns when the monitor is turned the other way'),
+      active: layout.orientation !== undefined && layout.adaptOrientation !== false,
+    });
+    adapt.connect('notify::active', () =>
+      edit((target) => {
+        // Layouts from earlier versions have no orientation; pin the one shown.
+        target.orientation ??= orientation;
+        if (adapt.active) delete target.adaptOrientation;
+        else target.adaptOrientation = false;
+      }, false),
+    );
+    container.add_row(adapt);
 
     container.add_row(
       this.gapRow(_('Outer margin'), layout.outerGap, (value) =>
@@ -691,6 +787,16 @@ function previewZones(
     const rectangle = rectangles.get(zone.id);
     return rectangle ? [[zone, rectangle] as [typeof zone, Rectangle]] : [];
   });
+}
+
+function previewAspect(orientation: Orientation, connected?: TopologyMonitor): number {
+  if (connected && orientationOf(connected) === orientation)
+    return connected.width / connected.height;
+  return orientation === 'portrait' ? 9 / 16 : 16 / 9;
+}
+
+function orientationLabel(orientation: Orientation): string {
+  return orientation === 'portrait' ? _('Vertical') : _('Horizontal');
 }
 
 function resetRatios(layout: MonitorLayout, path = ''): void {

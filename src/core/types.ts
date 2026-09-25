@@ -41,8 +41,15 @@ export type SplitAxis = 'horizontal' | 'vertical';
 
 export type LayoutNode = ZoneNode | SplitNode;
 
+/** Portrait when a monitor is taller than it is wide (rotated or natively vertical). */
+export type Orientation = 'landscape' | 'portrait';
+
 export type MonitorLayout = {
   role: MonitorRole;
+  /** Orientation the layout was drawn for. Layouts saved before 0.2 have none. */
+  orientation?: Orientation;
+  /** Swap rows and columns when the monitor's orientation differs. Defaults to true. */
+  adaptOrientation?: boolean;
   outerGap: number;
   innerGap: number;
   root: LayoutNode;
@@ -66,6 +73,9 @@ export type LogicalMonitor = Rectangle & {
   primary: boolean;
   scale: number;
 };
+
+/** A connected monitor as published by GNOME Shell for the preferences window. */
+export type TopologyMonitor = { role: MonitorRole; width: number; height: number };
 
 export type MonitorBinding = { layout: MonitorLayout; monitor: LogicalMonitor };
 
