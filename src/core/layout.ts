@@ -43,7 +43,7 @@ export function splitZone(
   const location = locateZone(layout.root, zoneId, '');
   if (!location) throw new Error('Zone not found.');
   if (location.path.length >= MAX_DEPTH) throw new Error('This zone cannot be split any further.');
-  const created: ZoneNode = { kind: 'zone', id: newId, name: nextZoneName(layout) };
+  const created: ZoneNode = { kind: 'zone', id: newId, name: 'Zone' };
   const split: SplitNode = {
     kind: 'split',
     axis,
@@ -52,6 +52,7 @@ export function splitZone(
     second: created,
   };
   replaceAt(layout, location.path, split);
+  numberZones(layout);
   return created;
 }
 
@@ -63,6 +64,7 @@ export function removeZone(layout: MonitorLayout, zoneId: string): void {
   const parentPath = location.path.slice(0, -1);
   const parent = nodeAt(layout.root, parentPath) as SplitNode;
   replaceAt(layout, parentPath, location.path.endsWith('0') ? parent.second : parent.first);
+  numberZones(layout);
 }
 
 export function setSplitRatio(layout: MonitorLayout, path: NodePath, ratio: number): void {
@@ -84,11 +86,21 @@ export function nodeAt(root: LayoutNode, path: NodePath): LayoutNode | undefined
   return node;
 }
 
-export function nextZoneName(layout: MonitorLayout): string {
-  const names = new Set(layoutZones(layout).map((zone) => zone.name.toLocaleLowerCase()));
-  let index = 1;
-  while (names.has(`zone ${index}`)) index++;
-  return `Zone ${index}`;
+/** Names Zonecraft generated itself, including the defaults of earlier versions. */
+const GENERATED_NAME = /^(zone( \d+(\.\d+)?)?|left|right)$/i;
+
+export function isGeneratedZoneName(name: string): boolean {
+  return GENERATED_NAME.test(name.trim());
+}
+
+/**
+ * Renames generated zones after their position (left to right, top to bottom within
+ * each split). Names typed by the user are kept but still take up their number.
+ */
+export function numberZones(layout: MonitorLayout): void {
+  layoutZones(layout).forEach((zone, index) => {
+    if (isGeneratedZoneName(zone.name)) zone.name = `Zone ${index + 1}`;
+  });
 }
 
 function locateZone(

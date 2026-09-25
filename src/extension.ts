@@ -76,9 +76,23 @@ export default class ZonecraftExtension extends Extension {
     if (!this.#repository || this.#indicator) return;
     this.#indicator = new ZonecraftIndicator(this.#repository, {
       activateProfile: (profile: LayoutProfile) => this.#activateProfile(profile),
-      openPreferences: () => this.openPreferences(),
+      openPreferences: () => this.#showPreferences(),
       undo: () => this.#undo(),
     });
+  }
+
+  /** GNOME refuses to open a second prefs dialog, so raise the one that is already open. */
+  #showPreferences(): void {
+    const open = shellGlobal.display
+      .list_all_windows()
+      .find(
+        (window: any) =>
+          [window.get_gtk_application_id(), window.get_wm_class()].includes(
+            'org.gnome.Shell.Extensions',
+          ) && window.get_title() === this.metadata.name,
+      );
+    if (open) Main.activateWindow(open);
+    else this.openPreferences();
   }
 
   #openProfileSelector(): void {
@@ -92,7 +106,7 @@ export default class ZonecraftExtension extends Extension {
     const profiles = this.#repository.data.profiles;
     if (profiles.length === 0) {
       Main.notify(_('Zonecraft'), _('Create a profile in preferences first.'));
-      this.openPreferences();
+      this.#showPreferences();
     } else if (profiles.length === 1) this.#activateProfile(profiles[0]!);
     else {
       this.#cancelOverlay();

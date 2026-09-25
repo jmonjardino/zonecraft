@@ -21,7 +21,7 @@ describe('profile data', () => {
     const root = profile.monitors[0]!.root;
     if (root.kind !== 'split') throw new Error('Expected a split');
     root.ratio = 100;
-    if (root.second.kind === 'zone') root.second.name = 'left';
+    if (root.second.kind === 'zone') root.second.name = 'zone 1';
     data.profiles.push(profile);
     const result = validateData(data);
     expect(result.valid).toBe(false);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { numberZones } from './layout.js';
 import { migrateV1 } from './migrations.js';
 import {
   MAX_DEPTH,
@@ -31,8 +32,8 @@ export function createDefaultProfile(id: string, name = 'My layout'): LayoutProf
           kind: 'split',
           axis: 'horizontal',
           ratio: WEIGHT_TOTAL / 2,
-          first: { kind: 'zone', id: `${id}-left`, name: 'Left' },
-          second: { kind: 'zone', id: `${id}-right`, name: 'Right' },
+          first: { kind: 'zone', id: `${id}-left`, name: 'Zone 1' },
+          second: { kind: 'zone', id: `${id}-right`, name: 'Zone 2' },
         },
       },
     ],
@@ -44,7 +45,9 @@ export function parseData(raw: string): ZonecraftData {
   if (isRecord(parsed) && parsed.schemaVersion === 1) parsed = migrateV1(parsed);
   const result = validateData(parsed);
   if (!result.valid) throw new Error(result.errors.join('\n'));
-  return parsed as ZonecraftData;
+  const data = parsed as ZonecraftData;
+  for (const profile of data.profiles) for (const layout of profile.monitors) numberZones(layout);
+  return data;
 }
 
 export function validateData(value: unknown): ValidationResult {

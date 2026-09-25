@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { layoutDividers } from '../src/core/geometry.js';
 import {
   layoutZones,
-  nextZoneName,
+  numberZones,
   removeZone,
   setSplitRatio,
   splitZone,
@@ -22,7 +22,7 @@ describe('split layouts', () => {
     setSplitRatio(layout, '0', 3000);
     setSplitRatio(layout, '1', 7000);
     expect(layoutZones(layout).map((zone) => zone.id)).toEqual(['p-left', 'bl', 'p-right', 'br']);
-    expect(bottomLeft.name).toBe('Zone 1');
+    expect(bottomLeft.name).toBe('Zone 2');
     const dividers = layoutDividers(layout.root, { x: 0, y: 0, width: 1000, height: 1000 }, 0);
     const [left, right] = dividers.filter((divider) => divider.axis === 'vertical');
     expect(left!.line.y).toBe(300);
@@ -70,11 +70,25 @@ describe('split layouts', () => {
     expect(() => splitZone(layout, 'p-left', 'vertical', 'extra')).toThrow(/at most/);
   });
 
-  it('picks the lowest unused default name', () => {
+  it('numbers generated names in zone order and keeps custom names', () => {
     const layout = createDefaultProfile('p').monitors[0]!;
+    const names = (): string[] => layoutZones(layout).map((zone) => zone.name);
+    expect(names()).toEqual(['Zone 1', 'Zone 2']);
     splitZone(layout, 'p-left', 'vertical', 'a');
-    splitZone(layout, 'p-left', 'vertical', 'b');
-    removeZone(layout, 'a');
-    expect(nextZoneName(layout)).toBe('Zone 1');
+    expect(names()).toEqual(['Zone 1', 'Zone 2', 'Zone 3']);
+    layoutZones(layout)[2]!.name = 'Editor';
+    splitZone(layout, 'p-left', 'horizontal', 'b');
+    expect(names()).toEqual(['Zone 1', 'Zone 2', 'Zone 3', 'Editor']);
+    removeZone(layout, 'p-left');
+    expect(names()).toEqual(['Zone 1', 'Zone 2', 'Editor']);
+  });
+
+  it('renames the defaults of earlier versions', () => {
+    const layout = createDefaultProfile('p').monitors[0]!;
+    const [left, right] = layoutZones(layout);
+    left!.name = 'Left';
+    right!.name = 'Zone 2.2';
+    numberZones(layout);
+    expect(layoutZones(layout).map((zone) => zone.name)).toEqual(['Zone 1', 'Zone 2']);
   });
 });
