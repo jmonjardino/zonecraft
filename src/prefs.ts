@@ -11,16 +11,15 @@ import {
   ExtensionPreferences,
   gettext as _,
 } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+import { calculateZoneRectangles, layoutDividers, type Divider } from './core/geometry.js';
 import {
-  addTrack,
-  mergeCells,
-  removeLastTrack,
-  resizeTracks,
-  unmergeZone,
-  zoneAt,
-  type Axis,
-  type Cell,
-} from './core/grid.js';
+  clampRatio,
+  layoutZones,
+  nodeAt,
+  removeZone,
+  setSplitRatio,
+  splitZone,
+} from './core/layout.js';
 import {
   createDefaultProfile,
   emptyData,
@@ -33,138 +32,172 @@ import {
   type Direction,
   type LayoutProfile,
   type MonitorLayout,
+  type Rectangle,
+  type SplitAxis,
   type ZonecraftData,
 } from './core/types.js';
 
+const PREVIEW_PADDING = 4;
+const PREVIEW_GAP = 8;
+const DIVIDER_GRAB_DISTANCE = 6;
+
+/** Shared state of the preferences window. Widgets are rebuilt from it after structural edits. */
+type EditorContext = {
+  window: any;
+  settings: any;
+  data: () => ZonecraftData;
+  /** Applies an edit to the live data and saves it; the page is rebuilt on idle unless told not to. */
+  commit: (mutation: (data: ZonecraftData) => void, rerender?: boolean) => void;
+  expanded: Set<string>;
+  selectedZones: Map<string, string>;
+};
+
 const GridPreview = GObject.registerClass(
   class GridPreview extends Gtk.DrawingArea {
-    layout: MonitorLayout;
-    selected = new Set<string>();
-    onChanged: () => void;
-    dragAxis: Axis | null = null;
-    dragSeparator = -1;
-    dragWeights: number[] = [];
+    layout: () => MonitorLayout | undefined;
+    selectedZone: () => string | undefined;
+    onSelect: (zoneId: string) => void;
+    onResized: () => void;
+    drag: { divider: Divider; startX: number; startY: number } | null = null;
+    pressX = 0;
+    pressY = 0;
 
-    constructor(layout: MonitorLayout, onChanged: () => void) {
+    constructor(options: {
+      layout: () => MonitorLayout | undefined;
+      selectedZone: () => string | undefined;
+      onSelect: (zoneId: string) => void;
+      onResized: () => void;
+    }) {
       super({
         hexpand: true,
         height_request: 260,
         focusable: true,
         margin_top: 12,
-        margin_bottom: 12,
+        margin_bottom: 6,
       });
-      this.layout = layout;
-      this.onChanged = onChanged;
+      this.layout = options.layout;
+      this.selectedZone = options.selectedZone;
+      this.onSelect = options.onSelect;
+      this.onResized = options.onResized;
       this.set_draw_func((_widget: any, context: any, width: number, height: number) =>
         this.draw(context, width, height),
       );
-      const click = new Gtk.GestureClick();
-      click.connect('pressed', (_gesture: any, _count: number, x: number, y: number) =>
-        this.toggleCell(x, y),
-      );
-      this.add_controller(click);
       const drag = new Gtk.GestureDrag();
       drag.connect('drag-begin', (_gesture: any, x: number, y: number) => this.beginDrag(x, y));
       drag.connect('drag-update', (_gesture: any, dx: number, dy: number) =>
         this.updateDrag(dx, dy),
       );
-      drag.connect('drag-end', () => {
-        if (this.dragAxis) this.onChanged();
-        this.dragAxis = null;
-      });
+      drag.connect('drag-end', (_gesture: any, dx: number, dy: number) => this.endDrag(dx, dy));
       this.add_controller(drag);
+      const motion = new Gtk.EventControllerMotion();
+      motion.connect('motion', (_controller: any, x: number, y: number) => {
+        if (this.drag) return;
+        const divider = this.dividerAt(x, y);
+        this.set_cursor_from_name(divider ? resizeCursor(divider.axis) : null);
+      });
+      this.add_controller(motion);
+    }
+
+    area(): Rectangle {
+      return {
+        x: PREVIEW_PADDING,
+        y: PREVIEW_PADDING,
+        width: this.get_width() - PREVIEW_PADDING * 2,
+        height: this.get_height() - PREVIEW_PADDING * 2,
+      };
     }
 
     draw(context: any, width: number, height: number): void {
       context.setSourceRGB(0.12, 0.13, 0.15);
       context.paint();
-      const columns = pixelBoundaries(this.layout.columnWeights, width);
-      const rows = pixelBoundaries(this.layout.rowWeights, height);
-      for (const zone of this.layout.zones) {
-        const x = columns[zone.column]!;
-        const y = rows[zone.row]!;
-        const right = columns[zone.column + zone.columnSpan]!;
-        const bottom = rows[zone.row + zone.rowSpan]!;
-        const selected = [...this.selected].some((key) => {
-          const [row, column] = key.split(':').map(Number);
-          return (
-            row! >= zone.row &&
-            row! < zone.row + zone.rowSpan &&
-            column! >= zone.column &&
-            column! < zone.column + zone.columnSpan
-          );
-        });
+      const layout = this.layout();
+      if (!layout || width <= PREVIEW_PADDING * 2 || height <= PREVIEW_PADDING * 2) return;
+      const selected = this.selectedZone();
+      for (const [zone, rectangle] of previewZones(layout, this.area())) {
+        const isSelected = zone.id === selected;
         context.setSourceRGBA(
-          selected ? 0.18 : 0.12,
-          selected ? 0.55 : 0.35,
-          selected ? 0.92 : 0.72,
-          selected ? 0.72 : 0.46,
+          isSelected ? 0.18 : 0.12,
+          isSelected ? 0.55 : 0.35,
+          isSelected ? 0.92 : 0.72,
+          isSelected ? 0.72 : 0.46,
         );
-        context.rectangle(x + 4, y + 4, right - x - 8, bottom - y - 8);
+        context.rectangle(rectangle.x, rectangle.y, rectangle.width, rectangle.height);
         context.fillPreserve();
         context.setSourceRGBA(0.55, 0.78, 1, 1);
-        context.setLineWidth(2);
+        context.setLineWidth(isSelected ? 3 : 1.5);
         context.stroke();
+        context.save();
+        context.rectangle(rectangle.x, rectangle.y, rectangle.width, rectangle.height);
+        context.clip();
         context.setSourceRGB(1, 1, 1);
         context.selectFontFace('Sans', 0, 0);
-        context.setFontSize(14);
-        context.moveTo(x + 12, y + 25);
+        context.setFontSize(13);
+        context.moveTo(rectangle.x + 8, rectangle.y + 20);
         context.showText(zone.name);
+        context.restore();
       }
     }
 
-    selectedCells(): Cell[] {
-      return [...this.selected].map((key) => {
-        const [row, column] = key.split(':').map(Number);
-        return { row: row!, column: column! };
-      });
-    }
-
-    clearSelection(): void {
-      this.selected.clear();
-      this.queue_draw();
-    }
-
-    toggleCell(x: number, y: number): void {
-      const column = trackAt(this.layout.columnWeights, x, this.get_width());
-      const row = trackAt(this.layout.rowWeights, y, this.get_height());
-      const key = `${row}:${column}`;
-      if (this.selected.has(key)) this.selected.delete(key);
-      else this.selected.add(key);
-      this.queue_draw();
+    dividerAt(x: number, y: number): Divider | null {
+      const layout = this.layout();
+      if (!layout) return null;
+      let best: { divider: Divider; distance: number } | null = null;
+      for (const divider of layoutDividers(layout.root, this.area(), PREVIEW_GAP, 'lenient')) {
+        const { line } = divider;
+        const along = divider.axis === 'horizontal' ? y : x;
+        const start = divider.axis === 'horizontal' ? line.y : line.x;
+        const length = divider.axis === 'horizontal' ? line.height : line.width;
+        if (along < start || along > start + length) continue;
+        const center =
+          divider.axis === 'horizontal' ? line.x + line.width / 2 : line.y + line.height / 2;
+        const distance = Math.abs((divider.axis === 'horizontal' ? x : y) - center);
+        if (distance > PREVIEW_GAP / 2 + DIVIDER_GRAB_DISTANCE) continue;
+        if (!best || distance < best.distance) best = { divider, distance };
+      }
+      return best?.divider ?? null;
     }
 
     beginDrag(x: number, y: number): void {
-      const vertical = nearestSeparator(this.layout.columnWeights, x, this.get_width());
-      const horizontal = nearestSeparator(this.layout.rowWeights, y, this.get_height());
-      if (vertical && (!horizontal || vertical.distance <= horizontal.distance)) {
-        this.dragAxis = 'column';
-        this.dragSeparator = vertical.index;
-        this.dragWeights = [...this.layout.columnWeights];
-      } else if (horizontal) {
-        this.dragAxis = 'row';
-        this.dragSeparator = horizontal.index;
-        this.dragWeights = [...this.layout.rowWeights];
-      }
+      this.pressX = x;
+      this.pressY = y;
+      const divider = this.dividerAt(x, y);
+      this.drag = divider ? { divider, startX: x, startY: y } : null;
+      this.grab_focus();
     }
 
     updateDrag(dx: number, dy: number): void {
-      if (!this.dragAxis) return;
-      if (this.dragAxis === 'column') this.layout.columnWeights = [...this.dragWeights];
-      else this.layout.rowWeights = [...this.dragWeights];
-      const pixels = this.dragAxis === 'column' ? dx : dy;
-      const size = this.dragAxis === 'column' ? this.get_width() : this.get_height();
-      try {
-        resizeTracks(
-          this.layout,
-          this.dragAxis,
-          this.dragSeparator,
-          Math.round((pixels * WEIGHT_TOTAL) / size),
-        );
-        this.queue_draw();
-      } catch {
-        // The visible divider simply stops at the minimum track size.
+      const layout = this.layout();
+      if (!this.drag || !layout) return;
+      const { divider, startX, startY } = this.drag;
+      const horizontal = divider.axis === 'horizontal';
+      const pointer = horizontal ? startX + dx : startY + dy;
+      const origin = horizontal ? divider.area.x : divider.area.y;
+      const size = (horizontal ? divider.area.width : divider.area.height) - PREVIEW_GAP;
+      if (size <= 0) return;
+      setSplitRatio(
+        layout,
+        divider.path,
+        ((pointer - origin - PREVIEW_GAP / 2) * WEIGHT_TOTAL) / size,
+      );
+      this.queue_draw();
+    }
+
+    endDrag(dx: number, dy: number): void {
+      const resized = this.drag !== null;
+      this.drag = null;
+      if (resized) {
+        this.onResized();
+        return;
       }
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) return;
+      const layout = this.layout();
+      if (!layout) return;
+      for (const [zone, rectangle] of previewZones(layout, this.area()))
+        if (contains(rectangle, this.pressX, this.pressY)) {
+          this.onSelect(zone.id);
+          this.queue_draw();
+          return;
+        }
     }
   },
 );
@@ -180,45 +213,74 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       this.showRepairPage(window, settings, error instanceof Error ? error.message : String(error));
       return;
     }
+    // One page for the lifetime of the window. Swapping pages while AdwViewStack
+    // animates the transition crashed GJS once the old page had been removed.
+    const page = new Adw.PreferencesPage({ title: _('Profiles'), icon_name: 'view-grid-symbolic' });
+    window.add(page);
+    let groups: any[] = [];
+    let renderSource = 0;
     const render = (): void => {
-      const oldPage = window.get_visible_page?.();
-      const page = this.buildProfilesPage(window, settings, data, (next) => {
-        settings.set_string('profiles-json', serializeData(next));
-        data = next;
-        render();
-      });
-      window.add(page);
-      window.set_visible_page?.(page);
-      if (oldPage) window.remove(oldPage);
+      for (const group of groups) page.remove(group);
+      groups = this.buildGroups(context);
+      for (const group of groups) page.add(group);
     };
+    const context: EditorContext = {
+      window,
+      settings,
+      data: () => data,
+      commit: (mutation, rerender = true) => {
+        const snapshot = JSON.stringify(data);
+        try {
+          mutation(data);
+          settings.set_string('profiles-json', serializeData(data));
+        } catch (error) {
+          data = JSON.parse(snapshot) as ZonecraftData;
+          rerender = true;
+          window.add_toast(
+            new Adw.Toast({ title: error instanceof Error ? error.message : String(error) }),
+          );
+        }
+        // Rebuild on idle: the widget that emitted this signal must outlive its handler.
+        if (rerender && !renderSource)
+          renderSource = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            renderSource = 0;
+            render();
+            return GLib.SOURCE_REMOVE;
+          });
+      },
+      expanded: new Set<string>(),
+      selectedZones: new Map<string, string>(),
+    };
+    window.connect('close-request', () => {
+      if (renderSource) GLib.source_remove(renderSource);
+      renderSource = 0;
+      return false;
+    });
     render();
   }
 
-  buildProfilesPage(
-    window: any,
-    settings: any,
-    data: ZonecraftData,
-    save: (data: ZonecraftData) => void,
-  ): any {
-    const page = new Adw.PreferencesPage({ title: _('Profiles'), icon_name: 'view-grid-symbolic' });
+  buildGroups(context: EditorContext): any[] {
+    const { settings, window } = context;
     const profilesGroup = new Adw.PreferencesGroup({
       title: _('Layout profiles'),
-      description: _('Create grids for the primary monitor and monitors around it.'),
+      description: _('Create layouts for the primary monitor and monitors around it.'),
     });
-    page.add(profilesGroup);
-    for (const profile of data.profiles)
-      profilesGroup.add(this.buildProfileRow(window, data, profile, save));
+    for (const profile of context.data().profiles)
+      profilesGroup.add(this.buildProfileRow(context, profile));
     const addProfile = new Adw.ButtonRow({
       title: _('Create profile'),
       start_icon_name: 'list-add-symbolic',
     });
-    addProfile.connect('activated', () => {
-      const next = cloneData(data);
-      next.profiles.push(
-        createDefaultProfile(randomId(), nextUniqueName(next.profiles, 'My layout')),
-      );
-      save(next);
-    });
+    addProfile.connect('activated', () =>
+      context.commit((data) => {
+        const profile = createDefaultProfile(
+          randomId(),
+          nextUniqueName(data.profiles, 'My layout'),
+        );
+        data.profiles.push(profile);
+        context.expanded.add(profile.id);
+      }),
+    );
     profilesGroup.add(addProfile);
 
     const behavior = new Adw.PreferencesGroup({ title: _('Behavior') });
@@ -241,34 +303,37 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       settings.set_boolean('show-panel-indicator', showIndicator.active),
     );
     behavior.add(showIndicator);
-    page.add(behavior);
-    return page;
+    return [profilesGroup, behavior];
   }
 
-  buildProfileRow(
-    window: any,
-    data: ZonecraftData,
-    profile: LayoutProfile,
-    save: (data: ZonecraftData) => void,
-  ): any {
+  buildProfileRow(context: EditorContext, profile: LayoutProfile): any {
+    const profileId = profile.id;
+    const findProfile = (data: ZonecraftData): LayoutProfile =>
+      data.profiles.find((candidate) => candidate.id === profileId)!;
     const row = new Adw.ExpanderRow({
       title: profile.name,
       subtitle: _(`${profile.monitors.length} monitor layout(s)`),
+      expanded: context.expanded.has(profileId),
+    });
+    row.connect('notify::expanded', () => {
+      if (row.expanded) context.expanded.add(profileId);
+      else context.expanded.delete(profileId);
     });
     const duplicate = new Gtk.Button({
       icon_name: 'edit-copy-symbolic',
       valign: Gtk.Align.CENTER,
       tooltip_text: _('Duplicate profile'),
     });
-    duplicate.connect('clicked', () => {
-      const next = cloneData(data);
-      const copy = cloneData(profile);
-      copy.id = randomId();
-      copy.name = nextUniqueName(next.profiles, `${profile.name} copy`);
-      for (const monitor of copy.monitors) for (const zone of monitor.zones) zone.id = randomId();
-      next.profiles.push(copy);
-      save(next);
-    });
+    duplicate.connect('clicked', () =>
+      context.commit((data) => {
+        const copy = cloneData(findProfile(data));
+        copy.id = randomId();
+        copy.name = nextUniqueName(data.profiles, `${copy.name} copy`);
+        for (const monitor of copy.monitors)
+          for (const zone of layoutZones(monitor)) zone.id = randomId();
+        data.profiles.push(copy);
+      }),
+    );
     row.add_suffix(duplicate);
     const remove = new Gtk.Button({
       icon_name: 'user-trash-symbolic',
@@ -277,8 +342,10 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     });
     remove.add_css_class('destructive-action');
     remove.connect('clicked', () =>
-      this.confirmDelete(window, profile.name, () =>
-        save({ ...data, profiles: data.profiles.filter((item) => item.id !== profile.id) }),
+      this.confirmDelete(context.window, profile.name, () =>
+        context.commit((data) => {
+          data.profiles = data.profiles.filter((item) => item.id !== profileId);
+        }),
       ),
     );
     row.add_suffix(remove);
@@ -286,40 +353,42 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     const name = new Adw.EntryRow({ title: _('Profile name'), text: profile.name });
     name.connect('apply', () => {
       const value = name.text.trim();
-      if (
-        !value ||
-        data.profiles.some(
+      const taken = context
+        .data()
+        .profiles.some(
           (candidate) =>
-            candidate.id !== profile.id &&
+            candidate.id !== profileId &&
             candidate.name.toLocaleLowerCase() === value.toLocaleLowerCase(),
-        )
-      )
+        );
+      if (!value || taken) {
+        context.window.add_toast(
+          new Adw.Toast({ title: _('Profile names must be non-empty and unique') }),
+        );
         return;
-      const next = cloneData(data);
-      next.profiles.find((candidate) => candidate.id === profile.id)!.name = value;
-      save(next);
+      }
+      context.commit((data) => (findProfile(data).name = value));
     });
     row.add_row(name);
     for (let monitorIndex = 0; monitorIndex < profile.monitors.length; monitorIndex++)
-      this.addMonitorEditor(window, row, data, profile.id, monitorIndex, save);
+      this.addMonitorEditor(context, row, profileId, monitorIndex);
 
     const addMonitorRow = new Adw.ActionRow({ title: _('Add monitor layout') });
     for (const direction of ['left', 'right', 'above', 'below'] as const) {
       const button = new Gtk.Button({ label: _(capitalize(direction)), valign: Gtk.Align.CENTER });
-      button.connect('clicked', () => {
-        const next = cloneData(data);
-        const target = next.profiles.find((candidate) => candidate.id === profile.id)!;
-        const rank =
-          1 +
-          target.monitors.filter(
-            (monitor) => monitor.role.kind === 'relative' && monitor.role.direction === direction,
-          ).length;
-        const layout = createDefaultProfile(randomId()).monitors[0]!;
-        layout.role = { kind: 'relative', direction, rank };
-        layout.zones.forEach((zone) => (zone.id = randomId()));
-        target.monitors.push(layout);
-        save(next);
-      });
+      button.connect('clicked', () =>
+        context.commit((data) => {
+          const target = findProfile(data);
+          const rank =
+            1 +
+            target.monitors.filter(
+              (monitor) => monitor.role.kind === 'relative' && monitor.role.direction === direction,
+            ).length;
+          const layout = createDefaultProfile(randomId()).monitors[0]!;
+          layout.role = { kind: 'relative', direction, rank };
+          for (const zone of layoutZones(layout)) zone.id = randomId();
+          target.monitors.push(layout);
+        }),
+      );
       addMonitorRow.add_suffix(button);
     }
     row.add_row(addMonitorRow);
@@ -327,23 +396,31 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
   }
 
   addMonitorEditor(
-    window: any,
+    context: EditorContext,
     container: any,
-    data: ZonecraftData,
     profileId: string,
     monitorIndex: number,
-    save: (data: ZonecraftData) => void,
   ): void {
-    const profile = data.profiles.find((candidate) => candidate.id === profileId)!;
-    const layout = profile.monitors[monitorIndex]!;
+    const findLayout = (data: ZonecraftData): MonitorLayout | undefined =>
+      data.profiles.find((candidate) => candidate.id === profileId)?.monitors[monitorIndex];
+    const edit = (mutation: (layout: MonitorLayout) => void, rerender = true): void =>
+      context.commit((data) => mutation(findLayout(data)!), rerender);
+    const layout = findLayout(context.data())!;
+    const selectionKey = `${profileId}/${monitorIndex}`;
+    const selectedZone = (): string | undefined => {
+      const current = findLayout(context.data());
+      if (!current) return undefined;
+      const zones = layoutZones(current);
+      const selected = context.selectedZones.get(selectionKey);
+      return zones.some((zone) => zone.id === selected) ? selected : zones[0]?.id;
+    };
+
+    const zones = layoutZones(layout);
     const title =
       layout.role.kind === 'primary'
         ? _('Primary monitor')
         : _(`${capitalize(layout.role.direction)} monitor ${layout.role.rank}`);
-    const header = new Adw.ActionRow({
-      title,
-      subtitle: _(`${layout.rowWeights.length} × ${layout.columnWeights.length} grid`),
-    });
+    const header = new Adw.ActionRow({ title, subtitle: _(`${zones.length} zone(s)`) });
     if (layout.role.kind !== 'primary') {
       const remove = new Gtk.Button({
         icon_name: 'list-remove-symbolic',
@@ -351,132 +428,105 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         valign: Gtk.Align.CENTER,
       });
       remove.connect('clicked', () =>
-        this.mutate(data, profileId, save, (nextProfile) =>
-          nextProfile.monitors.splice(monitorIndex, 1),
+        context.commit((data) =>
+          data.profiles
+            .find((candidate) => candidate.id === profileId)!
+            .monitors.splice(monitorIndex, 1),
         ),
       );
       header.add_suffix(remove);
     }
     container.add_row(header);
 
-    const preview = new GridPreview(layout, () => save(cloneData(data)));
-    const previewRow = new Gtk.ListBoxRow({
-      selectable: false,
-      activatable: false,
-      child: preview,
+    const editor = new Gtk.Box({
+      orientation: Gtk.Orientation.VERTICAL,
+      spacing: 6,
+      margin_start: 12,
+      margin_end: 12,
+      margin_bottom: 12,
     });
-    container.add_row(previewRow);
+    const preview = new GridPreview({
+      layout: () => findLayout(context.data()),
+      selectedZone,
+      onSelect: (zoneId: string) => context.selectedZones.set(selectionKey, zoneId),
+      // The preview already shows the new size, so only persist it.
+      onResized: () => edit(() => undefined, false),
+    });
+    editor.append(preview);
+    const hint = new Gtk.Label({
+      label: _(
+        'Click a zone to select it, then split or remove it. Drag the gap between zones to resize.',
+      ),
+      wrap: true,
+      xalign: 0,
+    });
+    hint.add_css_class('dim-label');
+    hint.add_css_class('caption');
+    editor.append(hint);
+    const actions = new Adw.WrapBox({ child_spacing: 6, line_spacing: 6 });
+    const splitAction = (label: string, axis: SplitAxis): any => {
+      const button = new Gtk.Button({ label });
+      button.connect('clicked', () => {
+        const zoneId = selectedZone();
+        if (!zoneId) return;
+        edit((target) => {
+          const created = splitZone(target, zoneId, axis, randomId());
+          context.selectedZones.set(selectionKey, created.id);
+        });
+      });
+      return button;
+    };
+    actions.append(splitAction(_('Split side by side'), 'horizontal'));
+    actions.append(splitAction(_('Split top and bottom'), 'vertical'));
+    const removeButton = new Gtk.Button({ label: _('Remove zone') });
+    removeButton.add_css_class('destructive-action');
+    removeButton.set_sensitive(zones.length > 1);
+    removeButton.connect('clicked', () => {
+      const zoneId = selectedZone();
+      if (zoneId) edit((target) => removeZone(target, zoneId));
+    });
+    actions.append(removeButton);
+    const equalize = new Gtk.Button({ label: _('Reset sizes') });
+    equalize.set_sensitive(layout.root.kind === 'split');
+    equalize.connect('clicked', () => edit((target) => resetRatios(target)));
+    actions.append(equalize);
+    editor.append(actions);
+    container.add_row(new Gtk.ListBoxRow({ selectable: false, activatable: false, child: editor }));
 
-    for (const zone of layout.zones) {
+    for (const zone of zones) {
       const zoneName = new Adw.EntryRow({ title: _('Zone name'), text: zone.name });
       zoneName.connect('apply', () => {
         const value = zoneName.text.trim();
-        const duplicate = layout.zones.some(
-          (candidate) =>
-            candidate.id !== zone.id &&
-            candidate.name.toLocaleLowerCase() === value.toLocaleLowerCase(),
-        );
+        const current = findLayout(context.data());
+        const duplicate =
+          !current ||
+          layoutZones(current).some(
+            (candidate) =>
+              candidate.id !== zone.id &&
+              candidate.name.toLocaleLowerCase() === value.toLocaleLowerCase(),
+          );
         if (!value || duplicate) {
-          window.add_toast(new Adw.Toast({ title: _('Zone names must be non-empty and unique') }));
+          context.window.add_toast(
+            new Adw.Toast({ title: _('Zone names must be non-empty and unique') }),
+          );
           return;
         }
-        this.mutate(data, profileId, save, (target) => {
-          target.monitors[monitorIndex]!.zones.find((candidate) => candidate.id === zone.id)!.name =
-            value;
-        });
+        edit((target) => {
+          layoutZones(target).find((candidate) => candidate.id === zone.id)!.name = value;
+        }, false);
+        preview.queue_draw();
       });
       container.add_row(zoneName);
     }
 
-    const gridActions = new Adw.ActionRow({
-      title: _('Grid tracks'),
-      subtitle: _('Select cells in the preview to merge them.'),
-    });
-    const actions: Array<[string, () => void]> = [
-      [
-        _('+ Row'),
-        () =>
-          this.mutate(data, profileId, save, (target) =>
-            addTrack(target.monitors[monitorIndex]!, 'row', randomId),
-          ),
-      ],
-      [
-        _('− Row'),
-        () =>
-          this.mutate(data, profileId, save, (target) =>
-            removeLastTrack(target.monitors[monitorIndex]!, 'row'),
-          ),
-      ],
-      [
-        _('+ Column'),
-        () =>
-          this.mutate(data, profileId, save, (target) =>
-            addTrack(target.monitors[monitorIndex]!, 'column', randomId),
-          ),
-      ],
-      [
-        _('− Column'),
-        () =>
-          this.mutate(data, profileId, save, (target) =>
-            removeLastTrack(target.monitors[monitorIndex]!, 'column'),
-          ),
-      ],
-      [
-        _('Merge'),
-        () =>
-          this.mutate(data, profileId, save, (target) =>
-            mergeCells(
-              target.monitors[monitorIndex]!,
-              preview.selectedCells(),
-              randomId(),
-              `Zone ${target.monitors[monitorIndex]!.zones.length + 1}`,
-            ),
-          ),
-      ],
-      [
-        _('Unmerge'),
-        () =>
-          this.mutate(data, profileId, save, (target) => {
-            const cell = preview.selectedCells()[0];
-            if (!cell) throw new Error('Select a merged zone first.');
-            const zone = zoneAt(target.monitors[monitorIndex]!, cell);
-            if (!zone) throw new Error('Zone not found.');
-            unmergeZone(target.monitors[monitorIndex]!, zone.id, randomId);
-          }),
-      ],
-    ];
-    for (const [label, callback] of actions) {
-      const button = new Gtk.Button({ label, valign: Gtk.Align.CENTER });
-      button.connect('clicked', () => {
-        try {
-          callback();
-        } catch (error) {
-          window.add_toast(
-            new Adw.Toast({ title: error instanceof Error ? error.message : String(error) }),
-          );
-        }
-      });
-      gridActions.add_suffix(button);
-    }
-    container.add_row(gridActions);
     container.add_row(
       this.gapRow(_('Outer margin'), layout.outerGap, (value) =>
-        this.mutate(
-          data,
-          profileId,
-          save,
-          (target) => (target.monitors[monitorIndex]!.outerGap = value),
-        ),
+        edit((target) => (target.outerGap = value), false),
       ),
     );
     container.add_row(
       this.gapRow(_('Space between zones'), layout.innerGap, (value) =>
-        this.mutate(
-          data,
-          profileId,
-          save,
-          (target) => (target.monitors[monitorIndex]!.innerGap = value),
-        ),
+        edit((target) => (target.innerGap = value), false),
       ),
     );
   }
@@ -494,17 +544,6 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     });
     row.connect('notify::value', () => changed(Math.round(row.value)));
     return row;
-  }
-
-  mutate(
-    data: ZonecraftData,
-    profileId: string,
-    save: (data: ZonecraftData) => void,
-    mutation: (profile: LayoutProfile) => void,
-  ): void {
-    const next = cloneData(data);
-    mutation(next.profiles.find((profile) => profile.id === profileId)!);
-    save(next);
   }
 
   confirmDelete(window: any, name: string, confirmed: () => void): void {
@@ -546,35 +585,40 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
   }
 }
 
-function pixelBoundaries(weights: number[], size: number): number[] {
-  const result = [0];
-  let cumulative = 0;
-  for (const weight of weights) {
-    cumulative += weight;
-    result.push(Math.round((cumulative * size) / WEIGHT_TOTAL));
-  }
-  return result;
+function previewZones(
+  layout: MonitorLayout,
+  area: Rectangle,
+): Array<[{ id: string; name: string }, Rectangle]> {
+  const rectangles = calculateZoneRectangles(
+    { ...layout, outerGap: 0, innerGap: PREVIEW_GAP },
+    area,
+    'lenient',
+  );
+  return layoutZones(layout).flatMap((zone) => {
+    const rectangle = rectangles.get(zone.id);
+    return rectangle ? [[zone, rectangle] as [typeof zone, Rectangle]] : [];
+  });
 }
 
-function trackAt(weights: number[], coordinate: number, size: number): number {
-  const boundaries = pixelBoundaries(weights, size);
-  return Math.max(
-    0,
-    boundaries.findIndex((boundary, index) => index > 0 && coordinate < boundary) - 1,
+function resetRatios(layout: MonitorLayout, path = ''): void {
+  const node = nodeAt(layout.root, path);
+  if (node?.kind !== 'split') return;
+  node.ratio = clampRatio(WEIGHT_TOTAL / 2);
+  resetRatios(layout, `${path}0`);
+  resetRatios(layout, `${path}1`);
+}
+
+function contains(rectangle: Rectangle, x: number, y: number): boolean {
+  return (
+    x >= rectangle.x &&
+    x < rectangle.x + rectangle.width &&
+    y >= rectangle.y &&
+    y < rectangle.y + rectangle.height
   );
 }
 
-function nearestSeparator(
-  weights: number[],
-  coordinate: number,
-  size: number,
-): { index: number; distance: number } | null {
-  const candidates = pixelBoundaries(weights, size)
-    .slice(1, -1)
-    .map((position, index) => ({ index, distance: Math.abs(position - coordinate) }))
-    .filter(({ distance }) => distance <= 10)
-    .sort((a, b) => a.distance - b.distance);
-  return candidates[0] ?? null;
+function resizeCursor(axis: SplitAxis): string {
+  return axis === 'horizontal' ? 'col-resize' : 'row-resize';
 }
 
 function randomId(): string {

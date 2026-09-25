@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { migrateV1 } from './migrations.js';
 import {
-  MAX_TRACKS,
+  MAX_DEPTH,
+  MAX_ZONES,
   MIN_WEIGHT,
   SCHEMA_VERSION,
   WEIGHT_TOTAL,
-  type GridZone,
   type LayoutProfile,
   type ValidationResult,
   type ZonecraftData,
@@ -24,21 +25,23 @@ export function createDefaultProfile(id: string, name = 'My layout'): LayoutProf
     monitors: [
       {
         role: { kind: 'primary' },
-        rowWeights: [WEIGHT_TOTAL],
-        columnWeights: [WEIGHT_TOTAL / 2, WEIGHT_TOTAL / 2],
         outerGap: 8,
         innerGap: 8,
-        zones: [
-          { id: `${id}-left`, name: 'Left', row: 0, column: 0, rowSpan: 1, columnSpan: 1 },
-          { id: `${id}-right`, name: 'Right', row: 0, column: 1, rowSpan: 1, columnSpan: 1 },
-        ],
+        root: {
+          kind: 'split',
+          axis: 'horizontal',
+          ratio: WEIGHT_TOTAL / 2,
+          first: { kind: 'zone', id: `${id}-left`, name: 'Left' },
+          second: { kind: 'zone', id: `${id}-right`, name: 'Right' },
+        },
       },
     ],
   };
 }
 
 export function parseData(raw: string): ZonecraftData {
-  const parsed: unknown = JSON.parse(raw);
+  let parsed: unknown = JSON.parse(raw);
+  if (isRecord(parsed) && parsed.schemaVersion === 1) parsed = migrateV1(parsed);
   const result = validateData(parsed);
   if (!result.valid) throw new Error(result.errors.join('\n'));
   return parsed as ZonecraftData;
@@ -99,8 +102,6 @@ function validateLayout(value: unknown, prefix: string, errors: string[]): void 
     return;
   }
   validateRole(value.role, prefix, errors);
-  validateWeights(value.rowWeights, `${prefix} rows`, errors);
-  validateWeights(value.columnWeights, `${prefix} columns`, errors);
   if (
     !Number.isInteger(value.outerGap) ||
     (value.outerGap as number) < 0 ||
@@ -113,13 +114,56 @@ function validateLayout(value: unknown, prefix: string, errors: string[]): void 
     (value.innerGap as number) > 128
   )
     errors.push(`${prefix} inner gap must be an integer from 0 to 128.`);
+  const zones = { ids: new Set<string>(), names: new Set<string>(), count: 0 };
+  validateNode(value.root, 0, prefix, zones, errors);
+  if (zones.count > MAX_ZONES) errors.push(`${prefix} cannot have more than ${MAX_ZONES} zones.`);
+}
+
+function validateNode(
+  value: unknown,
+  depth: number,
+  prefix: string,
+  zones: { ids: Set<string>; names: Set<string>; count: number },
+  errors: string[],
+): void {
+  if (!isRecord(value)) {
+    errors.push(`${prefix} has an invalid layout node.`);
+    return;
+  }
+  if (value.kind === 'zone') {
+    zones.count++;
+    const label = `${prefix} zone ${zones.count}`;
+    validateIdentifier(value.id, `${label} id`, zones.ids, errors);
+    if (typeof value.name !== 'string' || value.name.trim().length === 0)
+      errors.push(`${label} name is required.`);
+    else {
+      const normalized = value.name.trim().toLocaleLowerCase();
+      if (zones.names.has(normalized))
+        errors.push(`${label} name must be unique within its monitor.`);
+      zones.names.add(normalized);
+    }
+    return;
+  }
+  if (value.kind !== 'split') {
+    errors.push(`${prefix} has an unknown layout node.`);
+    return;
+  }
+  if (depth >= MAX_DEPTH) {
+    errors.push(`${prefix} is nested more than ${MAX_DEPTH} levels deep.`);
+    return;
+  }
+  if (value.axis !== 'horizontal' && value.axis !== 'vertical')
+    errors.push(`${prefix} has a split with an invalid axis.`);
   if (
-    Array.isArray(value.rowWeights) &&
-    Array.isArray(value.columnWeights) &&
-    Array.isArray(value.zones)
+    !Number.isInteger(value.ratio) ||
+    (value.ratio as number) < MIN_WEIGHT ||
+    (value.ratio as number) > WEIGHT_TOTAL - MIN_WEIGHT
   )
-    validateZones(value.zones, value.rowWeights.length, value.columnWeights.length, prefix, errors);
-  else if (!Array.isArray(value.zones)) errors.push(`${prefix} zones must be an array.`);
+    errors.push(
+      `${prefix} split ratios must be integers from ${MIN_WEIGHT} to ${WEIGHT_TOTAL - MIN_WEIGHT}.`,
+    );
+  validateNode(value.first, depth + 1, prefix, zones, errors);
+  validateNode(value.second, depth + 1, prefix, zones, errors);
 }
 
 function validateRole(value: unknown, prefix: string, errors: string[]): void {
@@ -134,68 +178,6 @@ function validateRole(value: unknown, prefix: string, errors: string[]): void {
       (value.rank as number) < 1)
   )
     errors.push(`${prefix} has an invalid relative monitor role.`);
-}
-
-function validateWeights(value: unknown, label: string, errors: string[]): void {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_TRACKS) {
-    errors.push(`${label} must contain 1 to ${MAX_TRACKS} tracks.`);
-    return;
-  }
-  if (!value.every((weight) => Number.isInteger(weight) && weight >= MIN_WEIGHT))
-    errors.push(`${label} must use integer weights of at least ${MIN_WEIGHT}.`);
-  if (value.reduce<number>((sum, weight) => sum + Number(weight), 0) !== WEIGHT_TOTAL)
-    errors.push(`${label} weights must total ${WEIGHT_TOTAL}.`);
-}
-
-function validateZones(
-  zones: unknown[],
-  rows: number,
-  columns: number,
-  prefix: string,
-  errors: string[],
-): void {
-  const occupancy = Array.from({ length: rows }, () => Array<number>(columns).fill(0));
-  const ids = new Set<string>();
-  const names = new Set<string>();
-  for (const [index, value] of zones.entries()) {
-    const label = `${prefix} zone ${index + 1}`;
-    if (!isRecord(value)) {
-      errors.push(`${label} must be an object.`);
-      continue;
-    }
-    validateIdentifier(value.id, `${label} id`, ids, errors);
-    if (typeof value.name !== 'string' || value.name.trim().length === 0)
-      errors.push(`${label} name is required.`);
-    else {
-      const normalized = value.name.trim().toLocaleLowerCase();
-      if (names.has(normalized)) errors.push(`${label} name must be unique within its monitor.`);
-      names.add(normalized);
-    }
-    const coordinates = ['row', 'column', 'rowSpan', 'columnSpan'] as const;
-    if (!coordinates.every((key) => Number.isInteger(value[key]))) {
-      errors.push(`${label} coordinates must be integers.`);
-      continue;
-    }
-    const zone = value as unknown as GridZone;
-    if (
-      zone.row < 0 ||
-      zone.column < 0 ||
-      zone.rowSpan < 1 ||
-      zone.columnSpan < 1 ||
-      zone.row + zone.rowSpan > rows ||
-      zone.column + zone.columnSpan > columns
-    ) {
-      errors.push(`${label} is outside the grid.`);
-      continue;
-    }
-    for (let row = zone.row; row < zone.row + zone.rowSpan; row++)
-      for (let column = zone.column; column < zone.column + zone.columnSpan; column++)
-        occupancy[row]![column]!++;
-  }
-  const uncovered = occupancy.flat().filter((count) => count === 0).length;
-  const overlaps = occupancy.flat().filter((count) => count > 1).length;
-  if (uncovered > 0) errors.push(`${prefix} has ${uncovered} uncovered grid cell(s).`);
-  if (overlaps > 0) errors.push(`${prefix} has ${overlaps} overlapping grid cell(s).`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -214,20 +196,4 @@ export function nextUniqueName(profiles: LayoutProfile[], base: string): string 
   let suffix = 2;
   while (names.has(`${base} ${suffix}`.toLocaleLowerCase())) suffix++;
   return `${base} ${suffix}`;
-}
-
-export function normalizeWeights(weights: number[]): number[] {
-  if (weights.length === 0 || weights.length > MAX_TRACKS)
-    throw new Error('Invalid number of tracks.');
-  const sanitized = weights.map((weight) => Math.max(MIN_WEIGHT, Math.round(weight)));
-  const total = sanitized.reduce((sum, weight) => sum + weight, 0);
-  const normalized = sanitized.map((weight) => Math.floor((weight * WEIGHT_TOTAL) / total));
-  let remainder = WEIGHT_TOTAL - normalized.reduce((sum, weight) => sum + weight, 0);
-  for (let index = 0; remainder > 0; index = (index + 1) % normalized.length) {
-    normalized[index]!++;
-    remainder--;
-  }
-  if (normalized.some((weight) => weight < MIN_WEIGHT))
-    throw new Error('A track would be smaller than the minimum size.');
-  return normalized;
 }

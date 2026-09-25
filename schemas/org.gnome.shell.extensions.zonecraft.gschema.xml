@@ -2,7 +2,7 @@
 <schemalist gettext-domain="zonecraft">
   <schema id="org.gnome.shell.extensions.zonecraft" path="/org/gnome/shell/extensions/zonecraft/">
     <key name="profiles-json" type="s">
-      <default>'{"schemaVersion":1,"profiles":[]}'</default>
+      <default>'{"schemaVersion":2,"profiles":[]}'</default>
       <summary>Layout profiles</summary>
       <description>Versioned JSON containing the monitor grids and last application hints.</description>
     </key>

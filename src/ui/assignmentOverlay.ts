@@ -5,7 +5,8 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { calculateZoneRectangles } from '../core/geometry.js';
-import type { GridZone, LayoutProfile, MonitorBinding, Rectangle } from '../core/types.js';
+import { layoutZones } from '../core/layout.js';
+import type { LayoutProfile, MonitorBinding, Rectangle, Zone } from '../core/types.js';
 import { hintMatches, type WindowAssignment, type WindowCandidate } from '../runtime/windows.js';
 
 const shellGlobal = global as any;
@@ -173,8 +174,15 @@ export class AssignmentOverlay {
     for (const binding of this.#options.bindings) {
       const area = this.#options.workAreas.get(binding.monitor.index);
       if (!area) continue;
-      const rectangles = calculateZoneRectangles(binding.layout, area);
-      for (const zone of binding.layout.zones) {
+      let rectangles: Map<string, Rectangle>;
+      try {
+        rectangles = calculateZoneRectangles(binding.layout, area);
+      } catch (error) {
+        // Too many nested zones for this monitor's size; the other monitors stay usable.
+        console.warn(`Zonecraft: skipping monitor ${binding.monitor.index}: ${String(error)}`);
+        continue;
+      }
+      for (const zone of layoutZones(binding.layout)) {
         const rectangle = rectangles.get(zone.id);
         if (!rectangle) continue;
         const button = new St.Button({
@@ -224,7 +232,7 @@ export class AssignmentOverlay {
     const list = new St.BoxLayout({ vertical: true });
     for (const candidate of this.#sortedCandidates()) {
       const suggested = this.#options.bindings.some(({ layout }) =>
-        layout.zones.some((zone) => hintMatches(candidate, zone)),
+        layoutZones(layout).some((zone) => hintMatches(candidate, zone)),
       );
       const button = new St.Button({
         style_class: suggested ? 'zonecraft-window zonecraft-window-suggested' : 'zonecraft-window',
@@ -292,10 +300,10 @@ export class AssignmentOverlay {
   #sortedCandidates(): WindowCandidate[] {
     return [...this.#options.candidates].sort((a, b) => {
       const aSuggested = this.#options.bindings.some(({ layout }) =>
-        layout.zones.some((zone) => hintMatches(a, zone)),
+        layoutZones(layout).some((zone) => hintMatches(a, zone)),
       );
       const bSuggested = this.#options.bindings.some(({ layout }) =>
-        layout.zones.some((zone) => hintMatches(b, zone)),
+        layoutZones(layout).some((zone) => hintMatches(b, zone)),
       );
       return Number(bSuggested) - Number(aSuggested) || a.label.localeCompare(b.label);
     });
@@ -309,7 +317,7 @@ export class AssignmentOverlay {
     }
   }
 
-  #assignToZone(binding: MonitorBinding, zone: GridZone): void {
+  #assignToZone(binding: MonitorBinding, zone: Zone): void {
     if (!this.#selectedCandidate) {
       if (!this.#assignments.delete(zone.id)) return;
       this.#refreshZone(zone.id);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it, vi } from 'vitest';
+import { layoutZones } from '../src/core/layout.js';
 import { createDefaultProfile } from '../src/core/profiles.js';
 import type { MonitorBinding, Rectangle } from '../src/core/types.js';
 import {
@@ -31,7 +32,7 @@ function binding(): MonitorBinding {
 
 function assign(window: FakeWindow, zoneId: string, label = 'Window'): WindowAssignment {
   const bound = binding();
-  const zone = bound.layout.zones.find((candidate) => candidate.id === zoneId)!;
+  const zone = layoutZones(bound.layout).find((candidate) => candidate.id === zoneId)!;
   return { zone, binding: bound, candidate: { window, label } };
 }
 

@@ -8,6 +8,7 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 import { bindMonitorLayouts, roleKey } from './core/monitors.js';
+import { findZone } from './core/layout.js';
 import type { LayoutProfile, LogicalMonitor, Rectangle } from './core/types.js';
 import { ProfileRepository } from './runtime/repository.js';
 import {
@@ -171,7 +172,7 @@ export default class ZonecraftExtension extends Extension {
       const monitor = stored.monitors.find(
         (candidate) => roleKey(candidate.role) === roleKey(assignment.binding.layout.role),
       );
-      const zone = monitor?.zones.find((candidate) => candidate.id === assignment.zone.id);
+      const zone = monitor && findZone(monitor, assignment.zone.id);
       if (zone && assignment.candidate.hint) zone.appHint = assignment.candidate.hint;
     }
     this.#repository.save(data);

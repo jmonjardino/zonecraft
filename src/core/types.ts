@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-export const SCHEMA_VERSION = 1 as const;
+export const SCHEMA_VERSION = 2 as const;
 export const WEIGHT_TOTAL = 10_000;
 export const MIN_WEIGHT = 500;
-export const MAX_TRACKS = 12;
+export const MAX_ZONES = 64;
+export const MAX_DEPTH = 24;
 
 export type Direction = 'left' | 'right' | 'above' | 'below';
 
@@ -15,23 +16,36 @@ export type AppHint = {
   value: string;
 };
 
-export type GridZone = {
+export type Zone = {
   id: string;
   name: string;
-  row: number;
-  column: number;
-  rowSpan: number;
-  columnSpan: number;
   appHint?: AppHint;
 };
 
+export type ZoneNode = { kind: 'zone' } & Zone;
+
+/**
+ * Splits its area in two. `horizontal` places `first` left of `second`;
+ * `vertical` places `first` above `second`. `ratio` is the share of `first`
+ * in units of WEIGHT_TOTAL.
+ */
+export type SplitNode = {
+  kind: 'split';
+  axis: SplitAxis;
+  ratio: number;
+  first: LayoutNode;
+  second: LayoutNode;
+};
+
+export type SplitAxis = 'horizontal' | 'vertical';
+
+export type LayoutNode = ZoneNode | SplitNode;
+
 export type MonitorLayout = {
   role: MonitorRole;
-  rowWeights: number[];
-  columnWeights: number[];
   outerGap: number;
   innerGap: number;
-  zones: GridZone[];
+  root: LayoutNode;
 };
 
 export type LayoutProfile = {

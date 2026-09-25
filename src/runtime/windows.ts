@@ -2,11 +2,11 @@
 
 import Meta from 'gi://Meta';
 import { calculateZoneRectangles } from '../core/geometry.js';
-import type { AppHint, GridZone, MonitorBinding, Rectangle } from '../core/types.js';
+import type { AppHint, Zone, MonitorBinding, Rectangle } from '../core/types.js';
 
 export type WindowCandidate = { window: any; label: string; hint?: AppHint };
 export type WindowAssignment = {
-  zone: GridZone;
+  zone: Zone;
   binding: MonitorBinding;
   candidate: WindowCandidate;
 };
@@ -41,7 +41,7 @@ export function applicationHint(window: any): AppHint | undefined {
   return match ? { kind: match[0], value: match[1]! } : undefined;
 }
 
-export function hintMatches(candidate: WindowCandidate, zone: GridZone): boolean {
+export function hintMatches(candidate: WindowCandidate, zone: Zone): boolean {
   return Boolean(
     candidate.hint &&
     zone.appHint &&

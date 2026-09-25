@@ -3,7 +3,6 @@ import {
   createDefaultProfile,
   emptyData,
   nextUniqueName,
-  normalizeWeights,
   parseData,
   serializeData,
   validateData,
@@ -16,24 +15,21 @@ describe('profile data', () => {
     expect(parseData(serializeData(data))).toEqual(data);
   });
 
-  it('rejects overlaps and uncovered cells', () => {
+  it('rejects duplicate zone names and invalid ratios', () => {
     const data = emptyData();
     const profile = createDefaultProfile('profile-1');
-    profile.monitors[0]!.zones[1]!.column = 0;
+    const root = profile.monitors[0]!.root;
+    if (root.kind !== 'split') throw new Error('Expected a split');
+    root.ratio = 100;
+    if (root.second.kind === 'zone') root.second.name = 'left';
     data.profiles.push(profile);
     const result = validateData(data);
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.errors.join(' ')).toMatch(/uncovered.*overlapping/i);
+    if (!result.valid) expect(result.errors.join(' ')).toMatch(/unique.*ratios|ratios.*unique/i);
   });
 
   it('rejects future schema versions', () => {
-    expect(validateData({ schemaVersion: 2, profiles: [] }).valid).toBe(false);
-  });
-
-  it('normalizes track weights exactly', () => {
-    const result = normalizeWeights([1, 2, 3]);
-    expect(result.reduce((sum, value) => sum + value, 0)).toBe(10_000);
-    expect(result.every((value) => value >= 500)).toBe(true);
+    expect(validateData({ schemaVersion: 3, profiles: [] }).valid).toBe(false);
   });
 
   it('creates case-insensitive unique names', () => {

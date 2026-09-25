@@ -39,7 +39,7 @@ Select **Apply** and only the zones you filled are used; the empty `Notes` zone 
 ## Features
 
 - Multiple reusable layout profiles.
-- Free-form row and column grids with rectangular merged zones.
+- Free-form layouts: split any zone side by side or top and bottom, as often as needed (up to 64 zones per monitor), and resize each divider independently.
 - Different layouts for the primary monitor and monitors to its left, right, above, or below.
 - Visual assignment overlay with one window per zone.
 - Suggestions based on the last application used in a zone—never automatic movement.
@@ -86,7 +86,7 @@ gnome-extensions prefs zonecraft@jmonjardino.dev
 ## Use
 
 1. Open **Manage profiles…** from the Zonecraft panel indicator.
-2. Create a profile and configure the grid for each monitor role.
+2. Create a profile and design the layout for each monitor role: select a zone in the preview, split or remove it, and drag the gaps between zones to resize them. Profiles saved by `0.1.0` are converted automatically.
 3. Start the profile from the panel, or press <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>.
 4. Choose a window and then a zone. Repeat as needed.
 5. Select **Apply**. Empty zones and unselected windows are left untouched.
