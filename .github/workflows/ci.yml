@@ -23,7 +23,7 @@ jobs:
       - run: npm run check
       - run: npm test
       - name: Check that the committed dist/ matches the source
-        run: npm run build && git diff --exit-code -- dist
+        run: cp -r dist /tmp/dist-committed && npm run build && diff -r /tmp/dist-committed dist
       - name: Check the install script
         run: bash -n install.sh
       - run: make pack
