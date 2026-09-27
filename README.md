@@ -71,9 +71,9 @@ Log out and back in, and Zonecraft is ready: press <kbd>Super</kbd>+<kbd>Shift</
 
 To update, run `git pull` and `./install.sh` again, then log out and back in. To remove Zonecraft, run `./install.sh --uninstall`.
 
-The compiled extension is kept in `dist/`, so the installer does not need Node.js. To build it yourself instead, see [Development](#development).
+The installer only needs GNOME Shell: the compiled extension is kept in `dist/`, so there is nothing to build and no Node.js or npm to install.
 
-Open its profile editor with the panel menu or:
+To design your layouts, choose **Manage profiles…** in the panel menu, or run:
 
 ```bash
 gnome-extensions prefs zonecraft@jmonjardino.dev
@@ -100,6 +100,10 @@ A monitor taller than it is wide counts as vertical. Each monitor layout records
 
 ## Development
 
+This section is only for changing Zonecraft's code. To use Zonecraft, [Install](#install) is all you need.
+
+Building from source needs Node.js 22 or later:
+
 ```bash
 npm ci
 npm test
@@ -108,7 +112,7 @@ npm run build
 make pack
 ```
 
-The release archive is written to `build/releases/zonecraft@jmonjardino.dev.shell-extension.zip`. Runtime code is TypeScript compiled to ES2023 modules for GJS. The Shell interface uses St/Clutter; preferences use GTK4/libadwaita; GSettings stores a versioned JSON document.
+`npm run build` updates `dist/`; commit it together with your source changes, because `./install.sh` installs from there. `make pack` writes the release archive to `build/releases/zonecraft@jmonjardino.dev.shell-extension.zip`. Runtime code is TypeScript compiled to ES2023 modules for GJS. The Shell interface uses St/Clutter; preferences use GTK4/libadwaita; GSettings stores a versioned JSON document.
 
 For an isolated Shell smoke test on Fedora 44:
 
