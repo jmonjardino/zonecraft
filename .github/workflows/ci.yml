@@ -10,15 +10,23 @@ permissions:
 
 jobs:
   verify:
+    name: verify (${{ matrix.image }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        fedora: ['43', '44']
-    container: fedora:${{ matrix.fedora }}
+        image: ['fedora:43', 'fedora:44', 'ubuntu:26.04']
+    container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v5
       - name: Install tools
-        run: dnf install -y nodejs npm gnome-shell zip make git
+        run: |
+          if command -v dnf >/dev/null; then
+            dnf install -y nodejs npm gnome-shell zip make git
+          else
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              nodejs npm gnome-shell zip unzip make git ca-certificates
+          fi
       - run: npm ci
       - run: npm run check
       - run: npm test

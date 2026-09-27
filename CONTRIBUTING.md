@@ -4,7 +4,7 @@ Thank you for helping improve Zonecraft.
 
 ## Development setup
 
-Use Fedora 43 or 44 with a GNOME Wayland session and Node.js 22 or later. Fork the repository, create a focused branch, and run:
+Use Fedora 43, Fedora 44 or Ubuntu 26.04 LTS with a GNOME Wayland session and Node.js 22 or later. Fork the repository, create a focused branch, and run:
 
 ```bash
 npm ci
@@ -21,7 +21,7 @@ Test Shell-facing changes in an isolated GNOME Shell session before enabling the
 
 - Keep changes focused and explain the user-visible behavior.
 - Add or update tests for core logic.
-- Include Fedora/GNOME versions and manual test results for Shell UI changes.
+- Include distribution and GNOME Shell versions and manual test results for Shell UI changes.
 - Do not add telemetry, network access, subprocesses, or privileged services without prior design discussion.
 - Follow the official GNOME Extensions review guidelines and clean up every signal, actor, keybinding, and main-loop source in `disable()` or `destroy()`.
 - Use `GPL-3.0-or-later` SPDX headers in source files.

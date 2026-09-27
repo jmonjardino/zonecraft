@@ -3,7 +3,7 @@
 Zonecraft is a profile-based window organizer for GNOME Shell. Design a grid for each monitor role, start a profile, assign an open window to each zone, and apply the layout only when you are ready.
 
 > [!IMPORTANT]
-> Zonecraft is in early development. Version `0.1.0` targets Fedora and is installed by cloning this repository. Publishing on extensions.gnome.org is not a goal right now — see [Roadmap](#roadmap).
+> Zonecraft is in early development. Version `0.1.0` targets GNOME Shell 49 and 50 on Fedora and Ubuntu, and is installed by cloning this repository. Publishing on extensions.gnome.org is not a goal right now — see [Roadmap](#roadmap).
 
 ## Demo
 
@@ -50,16 +50,19 @@ Select **Apply** and only the zones you filled are used; the empty `Notes` zone 
 
 ## Compatibility
 
-| Fedora | GNOME Shell | Session | Status           |
-| ------ | ----------- | ------- | ---------------- |
-| 44     | 50          | Wayland | Primary target   |
-| 43     | 49          | Wayland | Supported target |
+| Distribution     | GNOME Shell | Session | Status                                |
+| ---------------- | ----------- | ------- | ------------------------------------- |
+| Fedora 44        | 50          | Wayland | Primary target                        |
+| Fedora 43        | 49          | Wayland | Supported target                      |
+| Ubuntu 26.04 LTS | 50          | Wayland | Tested in CI; desktop testing pending |
+
+Other distributions with GNOME Shell 49 or 50 should work, since Zonecraft depends only on GNOME Shell, but they are not tested.
 
 Zonecraft is a GNOME Shell extension, not a standalone compositor. It does not support KDE Plasma, Sway, Hyprland, or other desktop environments. X11 is not a supported target.
 
 ## Install
 
-You need GNOME Shell 49 or 50 on Wayland. Clone the repository and run the installer:
+You need GNOME Shell 49 or 50 on Wayland, and `git` to clone the repository (on Ubuntu: `sudo apt install git`). Clone the repository and run the installer:
 
 ```bash
 git clone https://github.com/jmonjardino/zonecraft.git
