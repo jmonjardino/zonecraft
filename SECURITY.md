@@ -6,6 +6,6 @@ Until the first stable release, only the latest commit on `main` receives securi
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a suspected vulnerability. Use the hosting provider's private vulnerability reporting feature after the repository is published. Until then, contact the maintainer privately through the address listed in the future public repository profile.
+Do not open a public issue for a suspected vulnerability. Report it privately through GitHub's [private vulnerability reporting](https://github.com/jmonjardino/zonecraft/security/advisories/new) (Security tab → Report a vulnerability).
 
 Include the affected version, GNOME/Fedora versions, reproduction steps, impact, and any suggested mitigation. Please allow a reasonable period for investigation before public disclosure.
