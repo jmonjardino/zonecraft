@@ -1,0 +1,8 @@
+{
+  "uuid": "zonecraft@jmonjardino.dev",
+  "name": "Zonecraft",
+  "description": "Create reusable monitor layouts and place windows into visual zones.",
+  "shell-version": ["49", "50"],
+  "settings-schema": "org.gnome.shell.extensions.zonecraft",
+  "gettext-domain": "zonecraft"
+}

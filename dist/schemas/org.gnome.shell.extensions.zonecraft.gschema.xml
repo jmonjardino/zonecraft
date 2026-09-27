@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="zonecraft">
+  <schema id="org.gnome.shell.extensions.zonecraft" path="/org/gnome/shell/extensions/zonecraft/">
+    <key name="profiles-json" type="s">
+      <default>'{"schemaVersion":2,"profiles":[]}'</default>
+      <summary>Layout profiles</summary>
+      <description>Versioned JSON containing the monitor grids and last application hints.</description>
+    </key>
+    <key name="open-selector" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;z']</default>
+      <summary>Open the Zonecraft profile selector</summary>
+    </key>
+    <key name="activate-profile" type="s">
+      <default>''</default>
+      <summary>Profile start request</summary>
+      <description>Written by the preferences window as "profile-id:nonce" to start that profile in GNOME Shell.</description>
+    </key>
+    <key name="monitor-topology" type="s">
+      <default>'[]'</default>
+      <summary>Connected monitors</summary>
+      <description>Written by GNOME Shell as JSON so the preferences window knows each monitor's role and size.</description>
+    </key>
+    <key name="show-panel-indicator" type="b">
+      <default>true</default>
+      <summary>Show the Zonecraft panel indicator</summary>
+    </key>
+  </schema>
+</schemalist>
+

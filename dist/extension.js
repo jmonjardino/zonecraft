@@ -1,0 +1,217 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Generated with AI for personal use.
+// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+// and can maintain this code.
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
+import { bindMonitorLayouts, roleKey } from './core/monitors.js';
+import { findZone } from './core/layout.js';
+import { adaptLayoutToMonitor, describeTopology } from './core/orientation.js';
+import { ProfileRepository } from './runtime/repository.js';
+import { applyAssignments, listWindowCandidates, restoreSnapshots, snapshotAssignments, SnapshotTracker, } from './runtime/windows.js';
+import { AssignmentOverlay, ProfileChooserOverlay } from './ui/assignmentOverlay.js';
+import { ZonecraftIndicator } from './ui/indicator.js';
+const shellGlobal = global;
+export default class ZonecraftExtension extends Extension {
+    #repository = null;
+    #indicator = null;
+    #overlay = null;
+    #snapshots = null;
+    #monitorsChangedId = 0;
+    #indicatorSettingId = 0;
+    #activateRequestId = 0;
+    enable() {
+        const settings = this.getSettings();
+        this.#repository = new ProfileRepository(settings);
+        this.#snapshots = new SnapshotTracker(() => this.#indicator?.setCanUndo(false));
+        if (settings.get_boolean('show-panel-indicator'))
+            this.#createIndicator();
+        this.#indicatorSettingId = settings.connect('changed::show-panel-indicator', () => {
+            if (settings.get_boolean('show-panel-indicator'))
+                this.#createIndicator();
+            else {
+                this.#indicator?.destroy();
+                this.#indicator = null;
+            }
+        });
+        this.#activateRequestId = settings.connect('changed::activate-profile', () => {
+            const [profileId] = settings.get_string('activate-profile').split(':');
+            const profile = this.#repository?.data.profiles.find((candidate) => candidate.id === profileId);
+            if (profile)
+                this.#activateProfile(profile);
+        });
+        Main.wm.addKeybinding('open-selector', settings, Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this.#openProfileSelector());
+        this.#monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
+            this.#cancelOverlay();
+            this.#publishTopology();
+        });
+        this.#publishTopology();
+    }
+    disable() {
+        this.#cancelOverlay();
+        if (this.#monitorsChangedId)
+            Main.layoutManager.disconnect(this.#monitorsChangedId);
+        this.#monitorsChangedId = 0;
+        if (this.#indicatorSettingId && this.#repository)
+            this.#repository.settings.disconnect(this.#indicatorSettingId);
+        this.#indicatorSettingId = 0;
+        if (this.#activateRequestId && this.#repository)
+            this.#repository.settings.disconnect(this.#activateRequestId);
+        this.#activateRequestId = 0;
+        Main.wm.removeKeybinding('open-selector');
+        this.#indicator?.destroy();
+        this.#indicator = null;
+        this.#repository?.destroy();
+        this.#repository = null;
+        this.#snapshots?.clear();
+        this.#snapshots = null;
+    }
+    #createIndicator() {
+        if (!this.#repository || this.#indicator)
+            return;
+        this.#indicator = new ZonecraftIndicator(this.#repository, {
+            activateProfile: (profile) => this.#activateProfile(profile),
+            openPreferences: () => this.#showPreferences(),
+            undo: () => this.#undo(),
+        });
+    }
+    /** GNOME refuses to open a second prefs dialog, so raise the one that is already open. */
+    #showPreferences() {
+        const open = shellGlobal.display
+            .list_all_windows()
+            .find((window) => [window.get_gtk_application_id(), window.get_wm_class()].includes('org.gnome.Shell.Extensions') && window.get_title() === this.metadata.name);
+        if (open)
+            Main.activateWindow(open);
+        else
+            this.openPreferences();
+    }
+    /** Preferences run in another process and cannot see the monitors, so share them. */
+    #publishTopology() {
+        const settings = this.#repository?.settings;
+        if (!settings)
+            return;
+        const topology = JSON.stringify(describeTopology(this.#logicalMonitors()));
+        if (settings.get_string('monitor-topology') !== topology)
+            settings.set_string('monitor-topology', topology);
+    }
+    #openProfileSelector() {
+        if (!this.#repository || this.#repository.error) {
+            Main.notifyError(_('Zonecraft'), _('Profiles are unavailable. Open preferences to repair them.'));
+            return;
+        }
+        const profiles = this.#repository.data.profiles;
+        if (profiles.length === 0) {
+            Main.notify(_('Zonecraft'), _('Create a profile in preferences first.'));
+            this.#showPreferences();
+        }
+        else if (profiles.length === 1)
+            this.#activateProfile(profiles[0]);
+        else {
+            this.#cancelOverlay();
+            try {
+                this.#overlay = new ProfileChooserOverlay(profiles, (profile) => {
+                    this.#cancelOverlay();
+                    this.#activateProfile(profile);
+                }, () => this.#cancelOverlay());
+            }
+            catch (error) {
+                this.#reportOverlayFailure(error);
+            }
+        }
+    }
+    #activateProfile(profile) {
+        this.#cancelOverlay();
+        const monitors = this.#logicalMonitors();
+        const bound = bindMonitorLayouts(profile.monitors, monitors);
+        const { missing } = bound;
+        const bindings = bound.bindings.map((binding) => ({
+            ...binding,
+            layout: adaptLayoutToMonitor(binding.layout, binding.monitor),
+        }));
+        if (bindings.length === 0) {
+            Main.notifyError(_('Zonecraft'), _('No monitor required by this profile is currently available.'));
+            return;
+        }
+        const workspace = shellGlobal.workspace_manager.get_active_workspace();
+        const workAreas = new Map();
+        for (const binding of bindings) {
+            const area = workspace.get_work_area_for_monitor(binding.monitor.index);
+            workAreas.set(binding.monitor.index, {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: area.height,
+            });
+        }
+        try {
+            this.#overlay = new AssignmentOverlay({
+                profile,
+                bindings,
+                candidates: listWindowCandidates(workspace),
+                workAreas,
+                missingRoles: missing.map(roleKey),
+                onCancel: () => this.#cancelOverlay(),
+                onApply: (assignments) => this.#apply(profile, assignments, workAreas),
+            });
+        }
+        catch (error) {
+            this.#reportOverlayFailure(error);
+        }
+    }
+    #apply(profile, assignments, workAreas) {
+        this.#snapshots?.replace(snapshotAssignments(assignments));
+        const failures = applyAssignments(assignments, workAreas);
+        this.#saveHints(profile, assignments);
+        this.#cancelOverlay();
+        this.#indicator?.setCanUndo((this.#snapshots?.snapshots.length ?? 0) > 0);
+        if (failures.length > 0)
+            Main.notifyError(_('Zonecraft applied with errors'), failures.join('\n'));
+        else
+            Main.notify(_('Zonecraft'), _(`Placed ${assignments.length} window(s).`));
+    }
+    #saveHints(profile, assignments) {
+        if (!this.#repository)
+            return;
+        const data = this.#repository.data;
+        const stored = data.profiles.find((candidate) => candidate.id === profile.id);
+        if (!stored)
+            return;
+        for (const assignment of assignments) {
+            const monitor = stored.monitors.find((candidate) => roleKey(candidate.role) === roleKey(assignment.binding.layout.role));
+            const zone = monitor && findZone(monitor, assignment.zone.id);
+            if (zone && assignment.candidate.hint)
+                zone.appHint = assignment.candidate.hint;
+        }
+        this.#repository.save(data);
+    }
+    #undo() {
+        const failures = restoreSnapshots(this.#snapshots?.snapshots ?? []);
+        this.#snapshots?.clear();
+        this.#indicator?.setCanUndo(false);
+        if (failures.length > 0)
+            Main.notifyError(_('Zonecraft undo failed'), failures.join('\n'));
+        else
+            Main.notify(_('Zonecraft'), _('The previous window layout was restored.'));
+    }
+    #reportOverlayFailure(error) {
+        this.#overlay = null;
+        Main.notifyError(_('Zonecraft'), error instanceof Error ? error.message : String(error));
+    }
+    #cancelOverlay() {
+        this.#overlay?.destroy();
+        this.#overlay = null;
+    }
+    #logicalMonitors() {
+        return Main.layoutManager.monitors.map((monitor, index) => ({
+            index: monitor.index ?? index,
+            primary: (monitor.index ?? index) === Main.layoutManager.primaryIndex,
+            x: monitor.x,
+            y: monitor.y,
+            width: monitor.width,
+            height: monitor.height,
+            scale: shellGlobal.display.get_monitor_scale(monitor.index ?? index),
+        }));
+    }
+}

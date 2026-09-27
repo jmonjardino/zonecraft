@@ -3,7 +3,7 @@
 Zonecraft is a profile-based window organizer for GNOME Shell. Design a grid for each monitor role, start a profile, assign an open window to each zone, and apply the layout only when you are ready.
 
 > [!IMPORTANT]
-> Zonecraft is in early development. Version `0.1.0` targets Fedora and is installed from source. Publishing on extensions.gnome.org is not a goal right now — see [Roadmap](#roadmap).
+> Zonecraft is in early development. Version `0.1.0` targets Fedora and is installed by cloning this repository. Publishing on extensions.gnome.org is not a goal right now — see [Roadmap](#roadmap).
 
 ## Demo
 
@@ -57,26 +57,21 @@ Select **Apply** and only the zones you filled are used; the empty `Notes` zone 
 
 Zonecraft is a GNOME Shell extension, not a standalone compositor. It does not support KDE Plasma, Sway, Hyprland, or other desktop environments. X11 is not a supported target.
 
-## Install from source on Fedora
+## Install
 
-Install the development tools:
-
-```bash
-sudo dnf install gnome-shell gjs libadwaita nodejs npm make zip
-```
-
-Build and install the extension for the current user:
+You need GNOME Shell 49 or 50 on Wayland. Clone the repository and run the installer:
 
 ```bash
-npm ci
-make install
+git clone https://github.com/jmonjardino/zonecraft.git
+cd zonecraft
+./install.sh
 ```
 
-Log out and back in, then enable Zonecraft:
+Log out and back in, and Zonecraft is ready: press <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or use the grid icon in the top bar. GNOME Shell only loads new extensions at login on Wayland, so this step cannot be skipped.
 
-```bash
-gnome-extensions enable zonecraft@jmonjardino.dev
-```
+To update, run `git pull` and `./install.sh` again, then log out and back in. To remove Zonecraft, run `./install.sh --uninstall`.
+
+The compiled extension is kept in `dist/`, so the installer does not need Node.js. To build it yourself instead, see [Development](#development).
 
 Open its profile editor with the panel menu or:
 

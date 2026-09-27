@@ -13,6 +13,8 @@ npm test
 make pack
 ```
 
+The compiled extension in `dist/` is committed so users can install without Node.js. Run `npm run build` and commit the updated `dist/` together with your source changes; CI fails when they differ.
+
 Test Shell-facing changes in an isolated GNOME Shell session before enabling them in your daily session. A fatal extension error can affect the desktop process.
 
 ## Pull requests
