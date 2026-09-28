@@ -17,8 +17,9 @@ export type FakeRectangle = { x: number; y: number; width: number; height: numbe
 export type SignalCallback = (window: FakeWindow) => void;
 
 export type FakeWindowCall =
-  | { method: 'maximize'; flags: number }
-  | { method: 'unmaximize'; flags: number }
+  | { method: 'maximize' }
+  | { method: 'unmaximize' }
+  | { method: 'set_maximize_flags'; flags: number }
   | { method: 'minimize' }
   | { method: 'unminimize' }
   | { method: 'move_to_monitor'; monitor: number }
@@ -128,14 +129,20 @@ export class FakeWindow {
     return this.maximizeFlags;
   }
 
-  maximize(flags: number = MaximizeFlags.BOTH): void {
-    this.maximizeFlags |= flags;
-    this.calls.push({ method: 'maximize', flags });
+  /** Since GNOME 49, maximize() and unmaximize() take no flags. */
+  maximize(): void {
+    this.maximizeFlags = MaximizeFlags.BOTH;
+    this.calls.push({ method: 'maximize' });
   }
 
-  unmaximize(flags: number = MaximizeFlags.BOTH): void {
-    this.maximizeFlags &= ~flags;
-    this.calls.push({ method: 'unmaximize', flags });
+  unmaximize(): void {
+    this.maximizeFlags = 0;
+    this.calls.push({ method: 'unmaximize' });
+  }
+
+  set_maximize_flags(flags: number): void {
+    this.maximizeFlags = flags;
+    this.calls.push({ method: 'set_maximize_flags', flags });
   }
 
   minimize(): void {

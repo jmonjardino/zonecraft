@@ -52,7 +52,7 @@ export function applyAssignments(assignments, workAreas) {
                 throw new Error('Zone geometry is unavailable.');
             const window = assignment.candidate.window;
             if (window.get_maximize_flags())
-                window.unmaximize(Meta.MaximizeFlags.BOTH);
+                window.unmaximize();
             if (window.minimized)
                 window.unminimize();
             if (window.get_monitor() !== assignment.binding.monitor.index)
@@ -73,10 +73,12 @@ export function restoreSnapshots(snapshots) {
             if (window.get_monitor() !== snapshot.monitor)
                 window.move_to_monitor(snapshot.monitor);
             if (window.get_maximize_flags())
-                window.unmaximize(Meta.MaximizeFlags.BOTH);
+                window.unmaximize();
             window.move_resize_frame(false, snapshot.rectangle.x, snapshot.rectangle.y, snapshot.rectangle.width, snapshot.rectangle.height);
+            // maximize() takes no flags since GNOME 49; this also restores a window
+            // that was maximized in one direction only.
             if (snapshot.maximized)
-                window.maximize(snapshot.maximized);
+                window.set_maximize_flags(snapshot.maximized);
             if (snapshot.minimized)
                 window.minimize();
         }

@@ -4,7 +4,7 @@ Thank you for helping improve Zonecraft.
 
 ## Development setup
 
-Use Fedora 43, Fedora 44 or Ubuntu 26.04 LTS with a GNOME Wayland session and Node.js 22 or later. Fork the repository, create a focused branch, and run:
+Use Fedora 43 to 45 or Ubuntu 26.04 LTS with a GNOME Wayland session and Node.js 22 or later. Fork the repository, create a focused branch, and run:
 
 ```bash
 npm ci

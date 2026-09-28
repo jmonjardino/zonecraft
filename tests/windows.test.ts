@@ -231,11 +231,27 @@ describe('snapshots and undo', () => {
     expect(window.callNames).toEqual([
       'move_to_monitor',
       'move_resize_frame',
-      'maximize',
+      'set_maximize_flags',
       'minimize',
     ]);
     expect(window.frameRect).toEqual({ x: 10, y: 20, width: 300, height: 200 });
     expect(window.monitor).toBe(3);
+    expect(window.maximizeFlags).toBe(MaximizeFlags.BOTH);
+  });
+
+  it('restores a window that was maximized in one direction only', () => {
+    const window = createFakeWindow({ maximizeFlags: MaximizeFlags.HORIZONTAL });
+    const snapshots = snapshotAssignments([assign(window, 'profile-left')]);
+    applyAssignments([assign(window, 'profile-left')], workAreas());
+    expect(window.maximizeFlags).toBe(0);
+
+    expect(restoreSnapshots(snapshots)).toEqual([]);
+
+    expect(window.maximizeFlags).toBe(MaximizeFlags.HORIZONTAL);
+    expect(window.calls).toContainEqual({
+      method: 'set_maximize_flags',
+      flags: MaximizeFlags.HORIZONTAL,
+    });
   });
 
   it('collects the error when a window rejects the restore', () => {

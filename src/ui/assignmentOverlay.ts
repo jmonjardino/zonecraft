@@ -83,7 +83,7 @@ export class ProfileChooserOverlay {
     const anchor = createMonitorAnchor(primaryMonitorRectangle());
     const card = new St.BoxLayout({
       style_class: 'zonecraft-chooser',
-      vertical: true,
+      orientation: Clutter.Orientation.VERTICAL,
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
     });
@@ -205,7 +205,7 @@ export class AssignmentOverlay {
   #buildTray(): void {
     this.#tray = new St.BoxLayout({
       style_class: 'zonecraft-tray',
-      vertical: true,
+      orientation: Clutter.Orientation.VERTICAL,
       x_align: Clutter.ActorAlign.END,
       y_align: Clutter.ActorAlign.CENTER,
     });
@@ -229,7 +229,7 @@ export class AssignmentOverlay {
       style_class: 'zonecraft-window-scroll',
       overlay_scrollbars: true,
     });
-    const list = new St.BoxLayout({ vertical: true });
+    const list = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL });
     for (const candidate of this.#sortedCandidates()) {
       const suggested = this.#options.bindings.some(({ layout }) =>
         layoutZones(layout).some((zone) => hintMatches(candidate, zone)),

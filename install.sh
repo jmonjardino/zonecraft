@@ -11,7 +11,7 @@ set -euo pipefail
 
 UUID='zonecraft@jmonjardino.dev'
 SCHEMA='schemas/org.gnome.shell.extensions.zonecraft.gschema.xml'
-SUPPORTED='49 50'
+SUPPORTED='49 50 51'
 
 cd "$(dirname "$0")"
 
@@ -44,7 +44,7 @@ fi
 
 version=$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -n1 || true)
 if [[ -n $version && " $SUPPORTED " != *" $version "* ]]; then
-  fail "GNOME Shell $version is not supported. Zonecraft supports GNOME Shell ${SUPPORTED// / and }."
+  fail "GNOME Shell $version is not supported. Zonecraft supports GNOME Shell ${SUPPORTED// /, }."
 fi
 if [[ ${XDG_SESSION_TYPE:-wayland} != 'wayland' ]]; then
   printf 'Warning: Zonecraft is tested on Wayland only; this session is %s.\n' "$XDG_SESSION_TYPE" >&2
