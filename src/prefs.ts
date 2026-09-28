@@ -8,6 +8,8 @@ import Gdk from 'gi://Gdk?version=4.0';
 import GObject from 'gi://GObject';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
+import Pango from 'gi://Pango';
+import PangoCairo from 'gi://PangoCairo';
 import {
   ExtensionPreferences,
   gettext as _,
@@ -29,6 +31,7 @@ import {
   templateLayout,
   transposeNode,
 } from './core/orientation.js';
+import { layoutOrientation, monitorShape, profilePreview } from './core/preview.js';
 import {
   createDefaultProfile,
   emptyData,
@@ -52,6 +55,10 @@ import {
 const PREVIEW_PADDING = 4;
 const PREVIEW_GAP = 8;
 const DIVIDER_GRAB_DISTANCE = 6;
+const CARD_PREVIEW_PADDING = 12;
+/** Space kept around each zone in the card previews, so neighbours stay apart. */
+const CARD_ZONE_INSET = 3;
+const CARD_WIDTH = 250;
 /** Size used for monitors that are not connected right now. */
 const FALLBACK_MONITOR = { width: 1920, height: 1080 };
 
@@ -62,11 +69,115 @@ type EditorContext = {
   data: () => ZonecraftData;
   /** Applies an edit to the live data and saves it; the page is rebuilt on idle unless told not to. */
   commit: (mutation: (data: ZonecraftData) => void, rerender?: boolean) => void;
-  expanded: Set<string>;
+  /** Shows the editor of a profile on top of the profile cards. */
+  openEditor: (profileId: string) => void;
   selectedZones: Map<string, string>;
   /** Monitors connected right now, as published by GNOME Shell. Empty when unknown. */
   topology: () => TopologyMonitor[];
+  /** Card previews on the start page, redrawn whenever the saved profiles change. */
+  cardPreviews: any[];
 };
+
+const ProfilePreviewArea = GObject.registerClass(
+  class ProfilePreviewArea extends Gtk.DrawingArea {
+    profile: () => LayoutProfile | undefined;
+    topology: () => TopologyMonitor[];
+    styleIds: number[] = [];
+
+    constructor(options: {
+      profile: () => LayoutProfile | undefined;
+      topology: () => TopologyMonitor[];
+    }) {
+      super({ height_request: 150, hexpand: true, css_classes: ['caption'] });
+      this.profile = options.profile;
+      this.topology = options.topology;
+      this.set_draw_func((_widget: any, context: any, width: number, height: number) =>
+        this.draw(context, width, height),
+      );
+      // The accent colour and dark style can change while the window is open.
+      const style = Adw.StyleManager.get_default();
+      this.connect('realize', () => {
+        this.styleIds = ['notify::dark', 'notify::accent-color-rgba'].map((signal) =>
+          style.connect(signal, () => this.queue_draw()),
+        );
+      });
+      this.connect('unrealize', () => {
+        for (const id of this.styleIds) style.disconnect(id);
+        this.styleIds = [];
+      });
+    }
+
+    draw(context: any, width: number, height: number): void {
+      const foreground = this.get_color();
+      const accent = Adw.StyleManager.get_default().get_accent_color_rgba();
+      const profile = this.profile();
+      const preview = profile ? profilePreview(profile, this.topology()) : null;
+      const padding = CARD_PREVIEW_PADDING;
+      const available = { width: width - padding * 2, height: height - padding * 2 };
+      if (available.width <= 0 || available.height <= 0) return;
+      if (!preview || preview.monitors.length === 0) {
+        roundedRectangle(context, { x: padding, y: padding, ...available }, 8);
+        setColor(context, foreground, 0.35);
+        context.setLineWidth(1.5);
+        context.setDash([6, 4], 0);
+        context.stroke();
+        context.setDash([], 0);
+        this.drawLabel(context, _('No preview'), { x: padding, y: padding, ...available }, 0.6);
+        return;
+      }
+      const boxWidth = Math.min(available.width, available.height * preview.aspect);
+      const boxHeight = Math.min(available.height, available.width / preview.aspect);
+      const box = {
+        x: padding + (available.width - boxWidth) / 2,
+        y: padding + (available.height - boxHeight) / 2,
+        width: boxWidth,
+        height: boxHeight,
+      };
+      const scale = (rect: Rectangle): Rectangle => ({
+        x: box.x + rect.x * box.width,
+        y: box.y + rect.y * box.height,
+        width: rect.width * box.width,
+        height: rect.height * box.height,
+      });
+      for (const monitor of preview.monitors) {
+        const screen = scale(monitor.rect);
+        roundedRectangle(context, screen, 4);
+        setColor(context, foreground, 0.08);
+        context.fillPreserve();
+        setColor(context, foreground, monitor.primary ? 0.55 : 0.3);
+        context.setLineWidth(1);
+        context.stroke();
+        for (const zone of monitor.zones) {
+          const rect = inset(scale(zone.rect), CARD_ZONE_INSET);
+          if (rect.width <= 0 || rect.height <= 0) continue;
+          roundedRectangle(context, rect, 2);
+          setColor(context, accent, 0.3);
+          context.fillPreserve();
+          setColor(context, accent, 0.9);
+          context.setLineWidth(1);
+          context.stroke();
+          // The name when it fits, otherwise the zone number, otherwise nothing.
+          if (!this.drawLabel(context, zone.name, rect, 0.9))
+            this.drawLabel(context, String(zone.number), rect, 0.9);
+        }
+      }
+    }
+
+    /** Draws `text` centred in `area` if it fits. Returns whether it was drawn. */
+    drawLabel(context: any, text: string, area: Rectangle, alpha: number): boolean {
+      const layout = this.create_pango_layout(text);
+      const [textWidth, textHeight] = layout.get_pixel_size();
+      if (textWidth + 6 > area.width || textHeight + 2 > area.height) return false;
+      setColor(context, this.get_color(), alpha);
+      context.moveTo(
+        area.x + (area.width - textWidth) / 2,
+        area.y + (area.height - textHeight) / 2,
+      );
+      PangoCairo.show_layout(context, layout);
+      return true;
+    }
+  },
+);
 
 const GridPreview = GObject.registerClass(
   class GridPreview extends Gtk.DrawingArea {
@@ -245,11 +356,27 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     const page = new Adw.PreferencesPage({ title: _('Profiles'), icon_name: 'view-grid-symbolic' });
     window.add(page);
     let groups: any[] = [];
+    // The profile editor is a subpage pushed over the cards; its groups are rebuilt in place.
+    let editor: { profileId: string; page: any; content: any; groups: any[] } | null = null;
     let renderSource = 0;
+    const renderEditor = (): void => {
+      if (!editor) return;
+      const profile = data.profiles.find((candidate) => candidate.id === editor!.profileId);
+      if (!profile) {
+        window.pop_subpage();
+        return;
+      }
+      editor.page.title = profile.name;
+      for (const group of editor.groups) editor.content.remove(group);
+      editor.groups = this.buildEditorGroups(context, profile.id);
+      for (const group of editor.groups) editor.content.add(group);
+    };
     const render = (): void => {
       for (const group of groups) page.remove(group);
+      context.cardPreviews = [];
       groups = this.buildGroups(context);
       for (const group of groups) page.add(group);
+      renderEditor();
     };
     // Rebuild on idle: the widget that emitted a signal must outlive its handler.
     const scheduleRender = (): void => {
@@ -269,6 +396,23 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       topology = parseTopology(next);
       scheduleRender();
     });
+    // Keeps the cards in step with the saved profiles: edits made here only need a redraw,
+    // changes written by anything else are loaded again.
+    let savedJson = settings.get_string('profiles-json');
+    const profilesId = settings.connect('changed::profiles-json', () => {
+      const next = settings.get_string('profiles-json');
+      if (next === savedJson) {
+        for (const preview of context.cardPreviews) preview.queue_draw();
+        return;
+      }
+      savedJson = next;
+      try {
+        data = parseData(next);
+      } catch {
+        return;
+      }
+      scheduleRender();
+    });
     const context: EditorContext = {
       window,
       settings,
@@ -277,7 +421,9 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         const snapshot = JSON.stringify(data);
         try {
           mutation(data);
-          settings.set_string('profiles-json', serializeData(data));
+          const json = serializeData(data);
+          savedJson = json;
+          settings.set_string('profiles-json', json);
         } catch (error) {
           data = JSON.parse(snapshot) as ZonecraftData;
           rerender = true;
@@ -287,12 +433,32 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         }
         if (rerender) scheduleRender();
       },
-      expanded: new Set<string>(),
+      openEditor: (profileId) => {
+        const profile = data.profiles.find((candidate) => candidate.id === profileId);
+        if (!profile || editor) return;
+        const content = new Adw.PreferencesPage();
+        const header = new Adw.HeaderBar();
+        header.pack_end(this.applyButton(context, profileId));
+        const toolbar = new Adw.ToolbarView({ content });
+        toolbar.add_top_bar(header);
+        const subpage = new Adw.NavigationPage({ title: profile.name, child: toolbar });
+        const opened = { profileId, page: subpage, content, groups: [] as any[] };
+        // Otherwise the name entry takes the focus and selects the whole name.
+        subpage.connect('shown', () => window.set_focus(null));
+        subpage.connect('hidden', () => {
+          if (editor === opened) editor = null;
+        });
+        editor = opened;
+        renderEditor();
+        window.push_subpage(subpage);
+      },
       selectedZones: new Map<string, string>(),
       topology: () => topology,
+      cardPreviews: [],
     };
     window.connect('close-request', () => {
       settings.disconnect(topologyId);
+      settings.disconnect(profilesId);
       if (renderSource) GLib.source_remove(renderSource);
       renderSource = 0;
       return false;
@@ -308,13 +474,44 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         'Create layouts for the primary monitor and monitors around it. New layouts follow the shape of the connected monitor: rows on vertical monitors, columns on horizontal ones.',
       ),
     });
-    for (const profile of context.data().profiles)
-      profilesGroup.add(this.buildProfileRow(context, profile));
+    const profiles = context.data().profiles;
+    if (profiles.length > 0) {
+      const cards = new Gtk.FlowBox({
+        selection_mode: Gtk.SelectionMode.NONE,
+        homogeneous: true,
+        min_children_per_line: 1,
+        max_children_per_line: 4,
+        column_spacing: 12,
+        row_spacing: 12,
+        activate_on_single_click: true,
+      });
+      const cardProfiles = new Map<any, string>();
+      for (const profile of profiles) {
+        const card = this.buildProfileCard(context, profile);
+        cards.append(card);
+        cardProfiles.set(card, profile.id);
+      }
+      cards.connect('child-activated', (_box: any, card: any) => {
+        const profileId = cardProfiles.get(card);
+        if (profileId) context.openEditor(profileId);
+      });
+      profilesGroup.add(cards);
+    } else {
+      const empty = new Gtk.Label({
+        label: _('No profiles yet. Create one below.'),
+        css_classes: ['dim-label'],
+        margin_top: 12,
+        margin_bottom: 12,
+      });
+      profilesGroup.add(empty);
+    }
+    const createGroup = new Adw.PreferencesGroup();
     const addProfile = new Adw.ButtonRow({
       title: _('Create profile'),
       start_icon_name: 'list-add-symbolic',
     });
-    const createProfile = (monitors: TopologyMonitor[]): void =>
+    const createProfile = (monitors: TopologyMonitor[]): void => {
+      let createdId: string | undefined;
       context.commit((data) => {
         const name = nextUniqueName(data.profiles, 'My layout');
         const profile =
@@ -322,20 +519,22 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
             ? createProfileFromMonitors(randomId(), name, monitors, randomId)
             : createDefaultProfile(randomId(), name);
         data.profiles.push(profile);
-        context.expanded.add(profile.id);
+        createdId = profile.id;
       });
+      if (createdId) context.openEditor(createdId);
+    };
     const topology = context.topology();
     addProfile.connect('activated', () =>
       createProfile(topology.filter((monitor) => monitor.role.kind === 'primary')),
     );
-    profilesGroup.add(addProfile);
+    createGroup.add(addProfile);
     if (topology.length > 1) {
       const addForMonitors = new Adw.ButtonRow({
         title: _(`Create profile for the ${topology.length} connected monitors`),
         start_icon_name: 'video-display-symbolic',
       });
       addForMonitors.connect('activated', () => createProfile(topology));
-      profilesGroup.add(addForMonitors);
+      createGroup.add(addForMonitors);
     }
 
     const behavior = new Adw.PreferencesGroup({ title: _('Behavior') });
@@ -348,22 +547,10 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       settings.set_boolean('show-panel-indicator', showIndicator.active),
     );
     behavior.add(showIndicator);
-    return [profilesGroup, behavior];
+    return [profilesGroup, createGroup, behavior];
   }
 
-  buildProfileRow(context: EditorContext, profile: LayoutProfile): any {
-    const profileId = profile.id;
-    const findProfile = (data: ZonecraftData): LayoutProfile =>
-      data.profiles.find((candidate) => candidate.id === profileId)!;
-    const row = new Adw.ExpanderRow({
-      title: profile.name,
-      subtitle: _(`${profile.monitors.length} monitor layout(s)`),
-      expanded: context.expanded.has(profileId),
-    });
-    row.connect('notify::expanded', () => {
-      if (row.expanded) context.expanded.add(profileId);
-      else context.expanded.delete(profileId);
-    });
+  applyButton(context: EditorContext, profileId: string): any {
     const apply = new Gtk.Button({
       icon_name: 'media-playback-start-symbolic',
       valign: Gtk.Align.CENTER,
@@ -373,11 +560,71 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       // GNOME Shell listens for this key and opens the assignment overlay.
       context.settings.set_string('activate-profile', `${profileId}:${GLib.get_monotonic_time()}`),
     );
-    row.add_suffix(apply);
+    return apply;
+  }
+
+  /** A card with a drawing of the profile's monitors and zones, and its actions. */
+  buildProfileCard(context: EditorContext, profile: LayoutProfile): any {
+    const profileId = profile.id;
+    const findProfile = (data: ZonecraftData): LayoutProfile =>
+      data.profiles.find((candidate) => candidate.id === profileId)!;
+    const preview = new ProfilePreviewArea({
+      profile: () => context.data().profiles.find((candidate) => candidate.id === profileId),
+      topology: context.topology,
+    });
+    context.cardPreviews.push(preview);
+    const zoneCount = profile.monitors.reduce(
+      (total, monitor) => total + layoutZones(monitor).length,
+      0,
+    );
+    const labels = new Gtk.Box({
+      orientation: Gtk.Orientation.VERTICAL,
+      hexpand: true,
+      valign: Gtk.Align.CENTER,
+    });
+    labels.append(
+      new Gtk.Label({
+        label: profile.name,
+        xalign: 0,
+        ellipsize: Pango.EllipsizeMode.END,
+        // Long names are cut instead of widening every card in the grid.
+        max_width_chars: 1,
+        css_classes: ['heading'],
+      }),
+    );
+    labels.append(
+      new Gtk.Label({
+        label: `${_(`${profile.monitors.length} monitor(s)`)} · ${_(`${zoneCount} zone(s)`)}`,
+        xalign: 0,
+        ellipsize: Pango.EllipsizeMode.END,
+        max_width_chars: 1,
+        css_classes: ['dim-label', 'caption'],
+      }),
+    );
+    const footer = new Gtk.Box({
+      spacing: 6,
+      margin_start: 12,
+      margin_end: 6,
+      margin_bottom: 6,
+    });
+    footer.append(labels);
+    const card = new Gtk.Box({
+      orientation: Gtk.Orientation.VERTICAL,
+      css_classes: ['card', 'activatable'],
+      width_request: CARD_WIDTH,
+      tooltip_text: _('Edit profile'),
+    });
+    card.append(preview);
+    card.append(footer);
+
+    const apply = this.applyButton(context, profileId);
+    apply.add_css_class('flat');
+    footer.append(apply);
     const duplicate = new Gtk.Button({
       icon_name: 'edit-copy-symbolic',
       valign: Gtk.Align.CENTER,
       tooltip_text: _('Duplicate profile'),
+      css_classes: ['flat'],
     });
     duplicate.connect('clicked', () =>
       context.commit((data) => {
@@ -389,13 +636,13 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         data.profiles.push(copy);
       }),
     );
-    row.add_suffix(duplicate);
+    footer.append(duplicate);
     const remove = new Gtk.Button({
       icon_name: 'user-trash-symbolic',
       valign: Gtk.Align.CENTER,
       tooltip_text: _('Delete profile'),
+      css_classes: ['flat', 'error'],
     });
-    remove.add_css_class('destructive-action');
     remove.connect('clicked', () =>
       this.confirmDelete(context.window, profile.name, () =>
         context.commit((data) => {
@@ -403,8 +650,16 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         }),
       ),
     );
-    row.add_suffix(remove);
+    footer.append(remove);
+    return new Gtk.FlowBoxChild({ child: card });
+  }
 
+  /** The groups of the profile editor: name, one group per monitor and adding monitors. */
+  buildEditorGroups(context: EditorContext, profileId: string): any[] {
+    const findProfile = (data: ZonecraftData): LayoutProfile =>
+      data.profiles.find((candidate) => candidate.id === profileId)!;
+    const profile = findProfile(context.data());
+    const profileGroup = new Adw.PreferencesGroup();
     const name = new Adw.EntryRow({ title: _('Profile name'), text: profile.name });
     name.connect('apply', () => {
       const value = name.text.trim();
@@ -423,10 +678,12 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       }
       context.commit((data) => (findProfile(data).name = value));
     });
-    row.add_row(name);
+    profileGroup.add(name);
+    const groups = [profileGroup];
     for (let monitorIndex = 0; monitorIndex < profile.monitors.length; monitorIndex++)
-      this.addMonitorEditor(context, row, profileId, monitorIndex);
+      groups.push(this.buildMonitorEditor(context, profileId, monitorIndex));
 
+    const addMonitorGroup = new Adw.PreferencesGroup();
     const addMonitorRow = new Adw.ActionRow({ title: _('Add monitor layout') });
     for (const direction of ['left', 'right', 'above', 'below'] as const) {
       const button = new Gtk.Button({ label: _(capitalize(direction)), valign: Gtk.Align.CENTER });
@@ -445,16 +702,12 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
       );
       addMonitorRow.add_suffix(button);
     }
-    row.add_row(addMonitorRow);
-    return row;
+    addMonitorGroup.add(addMonitorRow);
+    groups.push(addMonitorGroup);
+    return groups;
   }
 
-  addMonitorEditor(
-    context: EditorContext,
-    container: any,
-    profileId: string,
-    monitorIndex: number,
-  ): void {
+  buildMonitorEditor(context: EditorContext, profileId: string, monitorIndex: number): any {
     const findLayout = (data: ZonecraftData): MonitorLayout | undefined =>
       data.profiles.find((candidate) => candidate.id === profileId)?.monitors[monitorIndex];
     const edit = (mutation: (layout: MonitorLayout) => void, rerender = true): void =>
@@ -471,8 +724,7 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
 
     const zones = layoutZones(layout);
     const connected = findTopologyMonitor(context.topology(), layout.role);
-    const orientation: Orientation =
-      layout.orientation ?? (connected ? orientationOf(connected) : 'landscape');
+    const orientation = layoutOrientation(layout, connected);
     const title =
       layout.role.kind === 'primary'
         ? _('Primary monitor')
@@ -482,15 +734,16 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
           `connected: ${orientationLabel(orientationOf(connected))}, ${connected.width}×${connected.height}`,
         )
       : _('not connected');
-    const header = new Adw.ActionRow({
+    const group = new Adw.PreferencesGroup({
       title,
-      subtitle: `${_(`${zones.length} zone(s)`)} · ${status}`,
+      description: `${_(`${zones.length} zone(s)`)} · ${status}`,
     });
     if (layout.role.kind !== 'primary') {
       const remove = new Gtk.Button({
         icon_name: 'list-remove-symbolic',
         tooltip_text: _('Remove monitor layout'),
         valign: Gtk.Align.CENTER,
+        css_classes: ['flat'],
       });
       remove.connect('clicked', () =>
         context.commit((data) =>
@@ -499,9 +752,8 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
             .monitors.splice(monitorIndex, 1),
         ),
       );
-      header.add_suffix(remove);
+      group.set_header_suffix(remove);
     }
-    container.add_row(header);
 
     const editor = new Gtk.Box({
       orientation: Gtk.Orientation.VERTICAL,
@@ -512,7 +764,7 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     });
     const preview = new GridPreview({
       layout: () => findLayout(context.data()),
-      aspect: previewAspect(orientation, connected),
+      aspect: aspectOf(monitorShape(layout, connected)),
       selectedZone,
       onSelect: (zoneId: string) => context.selectedZones.set(selectionKey, zoneId),
       // The preview already shows the new size, so only persist it.
@@ -557,7 +809,7 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
     equalize.connect('clicked', () => edit((target) => resetRatios(target)));
     actions.append(equalize);
     editor.append(actions);
-    container.add_row(new Gtk.ListBoxRow({ selectable: false, activatable: false, child: editor }));
+    group.add(new Adw.PreferencesRow({ activatable: false, child: editor }));
 
     for (const zone of zones) {
       const zoneName = new Adw.EntryRow({ title: _('Zone name'), text: zone.name });
@@ -582,7 +834,7 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         }, false);
         preview.queue_draw();
       });
-      container.add_row(zoneName);
+      group.add(zoneName);
     }
 
     const orientations: Orientation[] = ['landscape', 'portrait'];
@@ -600,7 +852,7 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         target.orientation = chosen;
       });
     });
-    container.add_row(orientationRow);
+    group.add(orientationRow);
     const adapt = new Adw.SwitchRow({
       title: _('Adapt to rotated monitors'),
       subtitle: _('Swap rows and columns when the monitor is turned the other way'),
@@ -614,18 +866,19 @@ export default class ZonecraftPreferences extends ExtensionPreferences {
         else target.adaptOrientation = false;
       }, false),
     );
-    container.add_row(adapt);
+    group.add(adapt);
 
-    container.add_row(
+    group.add(
       this.gapRow(_('Outer margin'), layout.outerGap, (value) =>
         edit((target) => (target.outerGap = value), false),
       ),
     );
-    container.add_row(
+    group.add(
       this.gapRow(_('Space between zones'), layout.innerGap, (value) =>
         edit((target) => (target.innerGap = value), false),
       ),
     );
+    return group;
   }
 
   shortcutRow(window: any, settings: any): any {
@@ -789,10 +1042,8 @@ function previewZones(
   });
 }
 
-function previewAspect(orientation: Orientation, connected?: TopologyMonitor): number {
-  if (connected && orientationOf(connected) === orientation)
-    return connected.width / connected.height;
-  return orientation === 'portrait' ? 9 / 16 : 16 / 9;
+function aspectOf(size: { width: number; height: number }): number {
+  return size.width / size.height;
 }
 
 function orientationLabel(orientation: Orientation): string {
@@ -830,4 +1081,28 @@ function cloneData<T>(value: T): T {
 
 function capitalize(value: Direction): string {
   return `${value[0]!.toUpperCase()}${value.slice(1)}`;
+}
+
+function inset(rectangle: Rectangle, amount: number): Rectangle {
+  return {
+    x: rectangle.x + amount,
+    y: rectangle.y + amount,
+    width: rectangle.width - amount * 2,
+    height: rectangle.height - amount * 2,
+  };
+}
+
+function setColor(context: any, color: any, alpha: number): void {
+  context.setSourceRGBA(color.red, color.green, color.blue, color.alpha * alpha);
+}
+
+function roundedRectangle(context: any, rectangle: Rectangle, radius: number): void {
+  const { x, y, width, height } = rectangle;
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  context.newSubPath();
+  context.arc(x + width - r, y + r, r, -Math.PI / 2, 0);
+  context.arc(x + width - r, y + height - r, r, 0, Math.PI / 2);
+  context.arc(x + r, y + height - r, r, Math.PI / 2, Math.PI);
+  context.arc(x + r, y + r, r, Math.PI, (Math.PI * 3) / 2);
+  context.closePath();
 }
