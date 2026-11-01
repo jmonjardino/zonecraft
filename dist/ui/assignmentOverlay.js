@@ -5,6 +5,7 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { calculateZoneRectangles } from '../core/geometry.js';
 import { layoutZones } from '../core/layout.js';
+import { grabHoldsInput } from '../runtime/modal.js';
 import { hintMatches } from '../runtime/windows.js';
 const shellGlobal = global;
 export const GRAB_FAILURE_MESSAGE = 'Zonecraft could not take over the screen. Close other menus or dialogs and try again.';
@@ -43,18 +44,43 @@ function createMonitorAnchor(area) {
 }
 function pushOverlayModal(root) {
     const grab = Main.pushModal(root, { actionMode: Shell.ActionMode.SYSTEM_MODAL });
-    if (grab.get_seat_state() === Clutter.GrabState.NONE) {
+    // Clutter.GrabState only exists up to GNOME Shell 49.
+    if (!grabHoldsInput(grab, Clutter.GrabState?.NONE)) {
         Main.popModal(grab);
-        root.destroy();
         throw new Error(GRAB_FAILURE_MESSAGE);
     }
     return grab;
+}
+/** Release the modal and remove the overlay; safe to call more than once. */
+function releaseOverlay(root, grab) {
+    try {
+        if (grab)
+            Main.popModal(grab);
+    }
+    catch (error) {
+        // The modal was already popped, for example because the root was destroyed.
+        console.warn(`Zonecraft: ${String(error)}`);
+    }
+    root?.destroy();
 }
 export class ProfileChooserOverlay {
     #root;
     #grab = null;
     constructor(profiles, onSelect, onCancel) {
         this.#root = createOverlayRoot();
+        try {
+            this.#build(profiles, onSelect, onCancel);
+            Main.uiGroup.add_child(this.#root);
+            this.#grab = pushOverlayModal(this.#root);
+            shellGlobal.stage.set_key_focus(this.#root);
+        }
+        catch (error) {
+            // Never leave a modal overlay behind that nothing can close.
+            this.destroy();
+            throw error;
+        }
+    }
+    #build(profiles, onSelect, onCancel) {
         const anchor = createMonitorAnchor(primaryMonitorRectangle());
         const card = new St.BoxLayout({
             style_class: 'zonecraft-chooser',
@@ -84,15 +110,10 @@ export class ProfileChooserOverlay {
             }
             return Clutter.EVENT_PROPAGATE;
         });
-        Main.uiGroup.add_child(this.#root);
-        this.#grab = pushOverlayModal(this.#root);
-        shellGlobal.stage.set_key_focus(this.#root);
     }
     destroy() {
-        if (this.#grab)
-            Main.popModal(this.#grab);
+        releaseOverlay(this.#root, this.#grab);
         this.#grab = null;
-        this.#root?.destroy();
         this.#root = null;
     }
 }
@@ -111,31 +132,36 @@ export class AssignmentOverlay {
     constructor(options) {
         this.#options = options;
         this.#root = createOverlayRoot();
-        this.#zoneLayer = new St.Widget({ ...stageRectangle() });
-        this.#zoneLayer.set_layout_manager(new Clutter.FixedLayout());
-        this.#root.add_child(this.#zoneLayer);
-        this.#root.connect('key-press-event', (_actor, event) => {
-            if (event.get_key_symbol() === Clutter.KEY_Escape) {
-                this.#options.onCancel();
-                return Clutter.EVENT_STOP;
-            }
-            return Clutter.EVENT_PROPAGATE;
-        });
-        this.#buildZones();
-        this.#buildTray();
-        Main.uiGroup.add_child(this.#root);
-        this.#grab = pushOverlayModal(this.#root);
-        this.#trackCandidates();
-        shellGlobal.stage.set_key_focus(this.#root);
+        try {
+            this.#zoneLayer = new St.Widget({ ...stageRectangle() });
+            this.#zoneLayer.set_layout_manager(new Clutter.FixedLayout());
+            this.#root.add_child(this.#zoneLayer);
+            this.#root.connect('key-press-event', (_actor, event) => {
+                if (event.get_key_symbol() === Clutter.KEY_Escape) {
+                    this.#options.onCancel();
+                    return Clutter.EVENT_STOP;
+                }
+                return Clutter.EVENT_PROPAGATE;
+            });
+            this.#buildZones();
+            this.#buildTray();
+            Main.uiGroup.add_child(this.#root);
+            this.#grab = pushOverlayModal(this.#root);
+            this.#trackCandidates();
+            shellGlobal.stage.set_key_focus(this.#root);
+        }
+        catch (error) {
+            // Never leave a modal overlay behind that nothing can close.
+            this.destroy();
+            throw error;
+        }
     }
     destroy() {
         for (const [window, id] of this.#unmanagedIds)
             window.disconnect(id);
         this.#unmanagedIds.clear();
-        if (this.#grab)
-            Main.popModal(this.#grab);
+        releaseOverlay(this.#root, this.#grab);
         this.#grab = null;
-        this.#root?.destroy();
         this.#root = null;
         this.#zoneButtons.clear();
         this.#candidateButtons.clear();

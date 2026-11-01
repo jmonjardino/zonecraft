@@ -109,8 +109,9 @@ export class FakeWindow {
     return this.allowsMove;
   }
 
+  /** Like mutter, a window maximized in both directions reports that it cannot be resized. */
   allows_resize(): boolean {
-    return this.allowsResize;
+    return this.allowsResize && this.maximizeFlags !== MaximizeFlags.BOTH;
   }
 
   is_fullscreen(): boolean {

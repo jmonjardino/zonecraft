@@ -11,7 +11,10 @@ export default defineConfig({
     // GJS resolves `gi://` imports inside GNOME Shell; Node cannot. Aliasing them
     // to local stubs makes `src/runtime/**` importable from plain vitest specs.
     // Add one entry per namespace as more runtime modules become testable.
-    alias: [{ find: /^gi:\/\/Meta(\?.*)?$/, replacement: stub('./tests/stubs/gi/meta.ts') }],
+    alias: [
+      { find: /^gi:\/\/Meta(\?.*)?$/, replacement: stub('./tests/stubs/gi/meta.ts') },
+      { find: /^gi:\/\/GLib(\?.*)?$/, replacement: stub('./tests/stubs/gi/glib.ts') },
+    ],
   },
   test: {
     include: ['tests/**/*.test.ts'],

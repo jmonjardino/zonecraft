@@ -1,17 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { calculateZoneRectangles } from '../core/geometry.js';
 export function listWindowCandidates(workspace) {
     return workspace
         .list_windows()
         .filter((window) => window.get_window_type() === Meta.WindowType.NORMAL)
-        .filter((window) => !window.skip_taskbar && window.allows_move() && window.allows_resize())
+        .filter((window) => !window.skip_taskbar && window.allows_move() && canResize(window))
         .filter((window) => !window.is_fullscreen())
         .map((window) => ({
         window,
         label: window.get_title() || window.get_wm_class() || 'Untitled window',
         hint: applicationHint(window),
     }));
+}
+/**
+ * Mutter reports a window maximized in both directions as not resizable, even
+ * though it becomes resizable as soon as it is unmaximized, which
+ * `applyAssignments` does first. Without this, every maximized window was left
+ * out of the overlay.
+ */
+function canResize(window) {
+    return window.allows_resize() || window.get_maximize_flags() === Meta.MaximizeFlags.BOTH;
 }
 export function applicationHint(window) {
     const values = [
@@ -51,19 +61,63 @@ export function applyAssignments(assignments, workAreas) {
             if (!rectangle)
                 throw new Error('Zone geometry is unavailable.');
             const window = assignment.candidate.window;
-            if (window.get_maximize_flags())
+            const wasMaximized = Boolean(window.get_maximize_flags());
+            if (wasMaximized)
                 window.unmaximize();
             if (window.minimized)
                 window.unminimize();
             if (window.get_monitor() !== assignment.binding.monitor.index)
                 window.move_to_monitor(assignment.binding.monitor.index);
             window.move_resize_frame(false, rectangle.x, rectangle.y, rectangle.width, rectangle.height);
+            if (wasMaximized)
+                placeAgainWhenResized(window, rectangle);
         }
         catch (error) {
             failures.push(`${assignment.candidate.label}: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
     return failures;
+}
+/** How long to wait for a client to acknowledge that it was unmaximized. */
+export const UNMAXIMIZE_SETTLE_MS = 1000;
+/**
+ * On Wayland, unmaximizing only completes once the application acknowledges
+ * it. Mutter then applies the new size around the centre of the old maximized
+ * frame, which undoes the move made a moment earlier, so the window ends up in
+ * the middle of the screen. Move it again whenever its size changes, until it
+ * sits in its zone or the application had time to answer.
+ */
+function placeAgainWhenResized(window, rectangle) {
+    let sizeChangedId = 0;
+    let timeoutId = 0;
+    const stop = () => {
+        if (sizeChangedId)
+            window.disconnect(sizeChangedId);
+        if (timeoutId)
+            GLib.source_remove(timeoutId);
+        sizeChangedId = 0;
+        timeoutId = 0;
+    };
+    sizeChangedId = window.connect('size-changed', () => {
+        const frame = window.get_frame_rect();
+        if (frame.x === rectangle.x &&
+            frame.y === rectangle.y &&
+            frame.width === rectangle.width &&
+            frame.height === rectangle.height)
+            stop();
+        else
+            window.move_resize_frame(false, rectangle.x, rectangle.y, rectangle.width, rectangle.height);
+    });
+    timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, UNMAXIMIZE_SETTLE_MS, () => {
+        timeoutId = 0;
+        try {
+            stop();
+        }
+        catch {
+            // The window was closed in the meantime.
+        }
+        return GLib.SOURCE_REMOVE;
+    });
 }
 export function restoreSnapshots(snapshots) {
     const failures = [];

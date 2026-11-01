@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { layoutZones } from '../src/core/layout.js';
 import { createDefaultProfile } from '../src/core/profiles.js';
 import type { MonitorBinding, Rectangle } from '../src/core/types.js';
@@ -14,6 +14,7 @@ import {
   SnapshotTracker,
   type WindowAssignment,
 } from '../src/runtime/windows.js';
+import { clearTimeouts, pendingTimeouts, runTimeouts } from './stubs/gi/glib.js';
 import { MaximizeFlags, WindowType } from './stubs/gi/meta.js';
 import { createFakeWindow, createFakeWorkspace, type FakeWindow } from './stubs/window.js';
 
@@ -53,6 +54,21 @@ describe('window candidates', () => {
     const candidates = listWindowCandidates(workspace);
 
     expect(candidates.map((candidate) => candidate.label)).toEqual(['Editor']);
+  });
+
+  it('includes maximized windows, which mutter reports as not resizable', () => {
+    const maximized = createFakeWindow({ maximizeFlags: MaximizeFlags.BOTH, title: 'Browser' });
+    const tiled = createFakeWindow({ maximizeFlags: MaximizeFlags.VERTICAL, title: 'Terminal' });
+    const fixed = createFakeWindow({
+      maximizeFlags: MaximizeFlags.VERTICAL,
+      allowsResize: false,
+      title: 'Splash',
+    });
+    expect(maximized.allows_resize()).toBe(false);
+
+    const candidates = listWindowCandidates(createFakeWorkspace([maximized, tiled, fixed]));
+
+    expect(candidates.map((candidate) => candidate.label)).toEqual(['Browser', 'Terminal']);
   });
 
   it('includes minimized windows', () => {
@@ -145,6 +161,8 @@ describe('application hints', () => {
 });
 
 describe('applying assignments', () => {
+  beforeEach(clearTimeouts);
+
   it('unmaximizes, unminimizes and resizes a window into its zone', () => {
     const window = createFakeWindow({ maximizeFlags: MaximizeFlags.BOTH, minimized: true });
 
@@ -157,6 +175,40 @@ describe('applying assignments', () => {
       // The window already sits on monitor 0, so it is never moved between monitors.
     ]);
     expect(window.frameRect).toEqual({ x: 0, y: 32, width: 500, height: 700 });
+  });
+
+  it('places an unmaximized window again when the application acknowledges the new size', () => {
+    const window = createFakeWindow({ maximizeFlags: MaximizeFlags.BOTH });
+    applyAssignments([assign(window, 'profile-right')], workAreas());
+    // Mutter applies the acknowledged size around the old centre, undoing the move.
+    window.frameRect = { x: 250, y: 32, width: 500, height: 700 };
+
+    window.emit('size-changed');
+
+    expect(window.frameRect).toEqual({ x: 500, y: 32, width: 500, height: 700 });
+    window.emit('size-changed');
+    expect(window.handlers.size).toBe(0);
+    expect(pendingTimeouts()).toEqual([]);
+  });
+
+  it('stops waiting for the new size after a timeout', () => {
+    const window = createFakeWindow({ maximizeFlags: MaximizeFlags.BOTH });
+    applyAssignments([assign(window, 'profile-right')], workAreas());
+    expect(window.handlers.size).toBe(1);
+
+    runTimeouts();
+
+    expect(window.handlers.size).toBe(0);
+    window.frameRect = { x: 0, y: 0, width: 300, height: 300 };
+    window.emit('size-changed');
+    expect(window.frameRect).toEqual({ x: 0, y: 0, width: 300, height: 300 });
+  });
+
+  it('does not watch windows that were not maximized', () => {
+    const window = createFakeWindow();
+    applyAssignments([assign(window, 'profile-left')], workAreas());
+    expect(window.handlers.size).toBe(0);
+    expect(pendingTimeouts()).toEqual([]);
   });
 
   it('moves a window that is on another monitor before resizing it', () => {
